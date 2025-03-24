@@ -93,13 +93,11 @@ const Connection: React.FC<ConnectionProps> = ({
     currentSamplingRate,
     setCurrentSamplingRate
 }) => {
-
     // States and Refs for Connection & Recording
     const [isDeviceConnected, setIsDeviceConnected] = useState<boolean>(false); // Track if the device is connected
     const [FFTDeviceConnected, setFFTDeviceConnected] = useState<boolean>(false); // Track if the device is connected
     const isDeviceConnectedRef = useRef<boolean>(false); // Ref to track if the device is connected
     const isRecordingRef = useRef<boolean>(false); // Ref to track if the device is recording
-
     // UI States for Popovers and Buttons
     const [isEndTimePopoverOpen, setIsEndTimePopoverOpen] = useState(false);
     const [isAllEnabledChannelSelected, setIsAllEnabledChannelSelected] = useState(false);
@@ -1376,6 +1374,16 @@ const Connection: React.FC<ConnectionProps> = ({
                                         }}
                                     >
                                        NPG-Lite
+                                    </Button>
+                                )}
+                                  {!isDeviceConnected && (
+                                    <Button
+                                        className="py-2 px-4 rounded-xl font-semibold"
+                                        onClick={() => {
+                                            router.push("/muscle-strength");
+                                        }}
+                                    >
+                                     Muscle-Strength
                                     </Button>
                                 )}
                             </Popover>

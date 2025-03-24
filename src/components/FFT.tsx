@@ -35,7 +35,6 @@ const FFT = forwardRef(
     const fftBufferRef = useRef<number[][]>(Array.from({ length: 16 }, () => []));
     const [fftData, setFftData] = useState<number[][]>(Array.from({ length: 16 }, () => []));
     const fftSize = currentSamplingRate + 6 * (currentSamplingRate / 250);
-    // console.log(fftSize);
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const containerRef = useRef<HTMLDivElement>(null);
     const { theme } = useTheme();
@@ -48,17 +47,14 @@ const FFT = forwardRef(
     const linesRef = useRef<WebglLine[]>([]);
     const sweepPositions = useRef<number[]>(new Array(6).fill(0)); // Array for sweep positions
 
-
     useImperativeHandle(
       ref,
       () => ({
         updateData(data: number[]) {
           for (let i = 0; i < 1; i++) {
-
             const sensorValue = data[i + 1];
             fftBufferRef.current[i].push(sensorValue);
             updatePlot(sensorValue, Zoom);
-
             if (fftBufferRef.current[i].length >= fftSize) {
               const processedBuffer = fftBufferRef.current[i].slice(0, fftSize); // Ensure exact length
               const dcRemovedBuffer = removeDCComponent(processedBuffer);
@@ -67,10 +63,7 @@ const FFT = forwardRef(
               const complexFFT = fft(windowedBuffer); // Perform FFT
               const magnitude = complexFFT.map(([real, imaginary]) =>
                 Math.sqrt(real ** 2 + imaginary ** 2)
-              ); // Calculate the magnitude
-              // console.log("magnitude", complexFFT);
-              const freqs = Array.from({ length: fftSize / 2 }, (_, i) => (i * currentSamplingRate) / fftSize);
-              // console.log(freqs);
+              ); 
               setFftData((prevData) => {
                 const newData = [...prevData];
                 newData[i] = magnitude.slice(0, fftSize / 2); // Assign to the corresponding channel
