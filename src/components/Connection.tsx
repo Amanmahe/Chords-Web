@@ -56,6 +56,8 @@ interface ConnectionProps {
     setIsDisplay: React.Dispatch<React.SetStateAction<boolean>>;
     setCanvasCount: React.Dispatch<React.SetStateAction<number>>; // Specify type for setCanvasCount
     canvasCount: number;
+    selectedChannel: number;
+    setSelectedChannel: React.Dispatch<React.SetStateAction<number>>;
     selectedChannels: number[]; // Array of selected channel indices
     setSelectedChannels: React.Dispatch<React.SetStateAction<number[]>>; // State updater for selectedChannels
     channelCount: number;
@@ -79,6 +81,8 @@ const Connection: React.FC<ConnectionProps> = ({
     isDisplay,
     setIsDisplay,
     setCanvasCount,
+    setSelectedChannel,
+    selectedChannel,
     canvasCount,
     setSelectedChannels,
     selectedChannels,
@@ -123,6 +127,7 @@ const Connection: React.FC<ConnectionProps> = ({
     const [deviceReady, setDeviceReady] = useState(false);
     const sampingrateref = useRef<number>(0);
     const [open, setOpen] = useState(false);
+    const [openfft, setOpenfft] = useState(false);
     const [isPauseSate, setIsPauseState] = useState(false);
 
     // UI Themes & Modes
@@ -273,6 +278,7 @@ const Connection: React.FC<ConnectionProps> = ({
         // Toggle the "Select All" button state
         setIsAllEnabledChannelSelected((prevState) => !prevState);
     };
+
 
     const toggleChannel = (channelIndex: number) => {
         setSelectedChannels((prevSelected) => {
@@ -725,6 +731,7 @@ const Connection: React.FC<ConnectionProps> = ({
             } else {
                 console.error("Readable stream not available");
             }
+            setIsserial(true);
 
             setSelectedChannels(initialSelectedChannelsRef.current);
             Connection(true);
@@ -743,6 +750,7 @@ const Connection: React.FC<ConnectionProps> = ({
 
         } catch (error) {
             await disconnectDevice();
+            setIsserial(false);
             console.error("Error connecting to device:", error);
             toast.error("Failed to connect to device.");
         }
@@ -770,7 +778,7 @@ const Connection: React.FC<ConnectionProps> = ({
             handleFrequencySelectionEXG(0, 3);
             let baudRate;
             let serialTimeout;
-
+            setSelectedChannel(1);
             if (!port) {
                 port = await navigator.serial.requestPort();
                 const newPortInfo = await port.getInfo();
@@ -1037,15 +1045,15 @@ const Connection: React.FC<ConnectionProps> = ({
         for (let channel = 0; channel < maxCanvasElementCountRef.current; channel++) {
             const sample = dataView.getInt16(1 + (channel * 2), false);
             channelData.push(
-              notchFiltersRef.current[channel].process(
-                EXGFiltersRef.current[channel].process(
-                  sample,
-                  appliedEXGFiltersRef.current[channel] || 0
-                ),
-                appliedFiltersRef.current[channel] || 0
-              )
+                notchFiltersRef.current[channel].process(
+                    EXGFiltersRef.current[channel].process(
+                        sample,
+                        appliedEXGFiltersRef.current[channel] || 0
+                    ),
+                    appliedFiltersRef.current[channel] || 0
+                )
             );
-          }
+        }
         datastream(channelData);
         if (isRecordingRef.current) {
             const channeldatavalues = channelData
@@ -1112,7 +1120,8 @@ const Connection: React.FC<ConnectionProps> = ({
             });
             const server = await device.gatt?.connect();
             if (!server) {
-                return;
+                setIsfftLoading(false);
+
             }
             connectedDeviceRef.current = device;
             // Initialize filters
@@ -1139,13 +1148,13 @@ const Connection: React.FC<ConnectionProps> = ({
             setSelectedBits(12);
             detectedBitsRef.current = 12;
             maxCanvasElementCountRef.current = 3;
-
+            setSelectedChannel(1);
             setCurrentSamplingRate(500);
             sampingrateref.current = 500;
 
         } catch (error) {
             console.log("Error: " + (error instanceof Error ? error.message : error));
-            setIsLoading(false);
+            setIsfftLoading(false);
 
         }
     }
@@ -1519,7 +1528,7 @@ const Connection: React.FC<ConnectionProps> = ({
                                 <PopoverTrigger asChild>
                                     <Button
                                         className="flex items-center gap-1 py-2 px-4 rounded-xl font-semibold"
-                                        onClick={() => (isDeviceConnected ? isserial? disconnectDevice():disconnect() : connectToDevice())}
+                                        onClick={() => (isDeviceConnected ? isserial ? disconnectDevice() : disconnect() : connectToDevice())}
                                         disabled={isLoading}
                                     >
                                         {isLoading ? (
@@ -1552,7 +1561,7 @@ const Connection: React.FC<ConnectionProps> = ({
                                     </Button>
                                 )}
                                 {!isDeviceConnected && (
-                                    <Popover open={open} onOpenChange={setOpen}>
+                                    <Popover open={openfft} onOpenChange={setOpenfft}>
                                         <PopoverTrigger asChild>
                                             <Button
                                                 className="flex items-center gap-1 py-2 px-4 rounded-xl font-semibold"
@@ -2005,17 +2014,46 @@ const Connection: React.FC<ConnectionProps> = ({
                             </Button>
                         </PopoverTrigger>
                         <PopoverContent className="w-50 p-4 mx-4 mb-2">
-                            <div className="flex flex-col max-h-80 overflow-y-auto">
-                                <div className="flex items-center">
-                                    <div className="text-sm font-semibold w-12">{channelNames[0]}</div>
+                        <div className="flex flex-col max-h-80 overflow-y-auto">
+                                <div className="flex items-center pb-2 ">
+                                    {/* Filter Name */}
+                                    <div className="text-sm font-semibold w-12"><ReplaceAll size={20} /></div>
+                                    {/* Buttons */}
                                     <div className="flex space-x-2">
+                                        <div className="flex items-center border border-input rounded-xl mx-0 px-0">
+                                            <Button
+                                                variant="outline"
+                                                size="sm"
+                                                onClick={() => removeEXGFilterFromAllChannels(Array.from({ length: maxCanvasElementCountRef.current }, (_, i) => i))}
+                                                className={`rounded-xl rounded-r-none border-0
+                        ${Object.keys(appliedEXGFiltersRef.current).length === 0
+                                                        ? "bg-red-700 hover:bg-white-500 hover:text-white text-white" // Disabled background
+                                                        : "bg-white-500" // Active background
+                                                    }`}
+                                            >
+                                                <CircleOff size={17} />
+                                            </Button>
+                                          <Button
+                                                variant="outline"
+                                                size="sm"
+                                                onClick={() => applyEXGFilterToAllChannels(Array.from({ length: maxCanvasElementCountRef.current }, (_, i) => i), 3)}
+                                                className={`flex items-center justify-center px-3 py-2 rounded-none select-none border-0
+                        ${Object.keys(appliedEXGFiltersRef.current).length === maxCanvasElementCountRef.current && Object.values(appliedEXGFiltersRef.current).every((value) => value === 3)
+                                                        ? "bg-green-700 hover:bg-white-500 text-white hover:text-white" // Disabled background
+                                                        : "bg-white-500" // Active background
+                                                    }`}
+                                            >
+                                                <Brain size={17} />
+                                            </Button> 
+                                          
+                                        </div>
                                         <div className="flex border border-input rounded-xl items-center mx-0 px-0">
                                             <Button
                                                 variant="outline"
                                                 size="sm"
-                                                onClick={() => removeNotchFilter(0)}
+                                                onClick={() => removeNotchFromAllChannels(Array.from({ length: maxCanvasElementCountRef.current }, (_, i) => i))}
                                                 className={`rounded-xl rounded-r-none border-0
-                                                        ${appliedFiltersRef.current[0] === undefined
+                          ${Object.keys(appliedFiltersRef.current).length === 0
                                                         ? "bg-red-700 hover:bg-white-500 hover:text-white text-white" // Disabled background
                                                         : "bg-white-500" // Active background
                                                     }`}
@@ -2025,9 +2063,9 @@ const Connection: React.FC<ConnectionProps> = ({
                                             <Button
                                                 variant="outline"
                                                 size="sm"
-                                                onClick={() => handleFrequencySelection(0, 1)}
+                                                onClick={() => applyFilterToAllChannels(Array.from({ length: maxCanvasElementCountRef.current }, (_, i) => i), 1)}
                                                 className={`flex items-center justify-center px-3 py-2 rounded-none select-none border-0
-                                                        ${appliedFiltersRef.current[0] === 1
+                          ${Object.keys(appliedFiltersRef.current).length === maxCanvasElementCountRef.current && Object.values(appliedFiltersRef.current).every((value) => value === 1)
                                                         ? "bg-green-700 hover:bg-white-500 text-white hover:text-white" // Disabled background
                                                         : "bg-white-500" // Active background
                                                     }`}
@@ -2037,20 +2075,153 @@ const Connection: React.FC<ConnectionProps> = ({
                                             <Button
                                                 variant="outline"
                                                 size="sm"
-                                                onClick={() => handleFrequencySelection(0, 2)}
-                                                className={
-                                                    `rounded-xl rounded-l-none border-0 ${appliedFiltersRef.current[0] === 2
-                                                        ? "bg-green-700 hover:bg-white-500 text-white hover:text-white "
-                                                        : "bg-white-500 animate-fade-in-right"
-                                                    }`
-                                                }
+                                                onClick={() => applyFilterToAllChannels(Array.from({ length: maxCanvasElementCountRef.current }, (_, i) => i), 2)}
+                                                className={`rounded-xl rounded-l-none border-0
+                          ${Object.keys(appliedFiltersRef.current).length === maxCanvasElementCountRef.current && Object.values(appliedFiltersRef.current).every((value) => value === 2)
+                                                        ? "bg-green-700 hover:bg-white-500 text-white hover:text-white" // Disabled background
+                                                        : "bg-white-500" // Active background
+                                                    }`}
                                             >
                                                 60Hz
                                             </Button>
                                         </div>
                                     </div>
                                 </div>
+                                <div className="flex flex-col space-y-2">
+                                    {channelNames.map((filterName, index) => (
+                                        <div key={filterName} className="flex items-center">
+                                            {/* Filter Name */}
+                                            <div className="text-sm font-semibold w-12">{filterName}</div>
+                                            {/* Buttons */}
+                                            <div className="flex space-x-2">
+                                                <div className="flex border border-input rounded-xl items-center mx-0 px-0">
+                                                    <Button
+                                                        variant="outline"
+                                                        size="sm"
+                                                        onClick={() => removeEXGFilter(index)}
+                                                        className={`rounded-xl rounded-r-none border-l-none border-0
+                                                        ${appliedEXGFiltersRef.current[index] === undefined
+                                                                ? "bg-red-700 hover:bg-white-500 hover:text-white text-white" // Disabled background
+                                                                : "bg-white-500" // Active background
+                                                            }`}
+                                                    >
+                                                        <CircleOff size={17} />
+                                                    </Button>
+                                        
+                                                    <Button
+                                                        variant="outline"
+                                                        size="sm"
+                                                        onClick={() => handleFrequencySelectionEXG(index, 3)}
+                                                        className={`flex items-center justify-center px-3 py-2 rounded-none select-none border-0
+                                                      ${appliedEXGFiltersRef.current[index] === 3
+                                                                ? "bg-green-700 hover:bg-white-500 text-white hover:text-white" // Disabled background
+                                                                : "bg-white-500" // Active background
+                                                            }`}
+                                                    >
+                                                        <Brain size={17} />
+                                                    </Button>
+                                               
+                                          
+                                                </div>
+                                                <div className="flex border border-input rounded-xl items-center mx-0 px-0">
+                                                    <Button
+                                                        variant="outline"
+                                                        size="sm"
+                                                        onClick={() => removeNotchFilter(index)}
+                                                        className={`rounded-xl rounded-r-none border-0
+                                                        ${appliedFiltersRef.current[index] === undefined
+                                                                ? "bg-red-700 hover:bg-white-500 hover:text-white text-white" // Disabled background
+                                                                : "bg-white-500" // Active background
+                                                            }`}
+                                                    >
+                                                        <CircleOff size={17} />
+                                                    </Button>
+                                                    <Button
+                                                        variant="outline"
+                                                        size="sm"
+                                                        onClick={() => handleFrequencySelection(index, 1)}
+                                                        className={`flex items-center justify-center px-3 py-2 rounded-none select-none border-0
+                                                        ${appliedFiltersRef.current[index] === 1
+                                                                ? "bg-green-700 hover:bg-white-500 text-white hover:text-white" // Disabled background
+                                                                : "bg-white-500" // Active background
+                                                            }`}
+                                                    >
+                                                        50Hz
+                                                    </Button>
+                                                    <Button
+                                                        variant="outline"
+                                                        size="sm"
+                                                        onClick={() => handleFrequencySelection(index, 2)}
+                                                        className={
+                                                            `rounded-xl rounded-l-none border-0 ${appliedFiltersRef.current[index] === 2
+                                                                ? "bg-green-700 hover:bg-white-500 text-white hover:text-white "
+                                                                : "bg-white-500 animate-fade-in-right"
+                                                            }`
+                                                        }
+                                                    >
+                                                        60Hz
+                                                    </Button>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        </PopoverContent>
+                    </Popover>
+                )}
 
+                {FFTDeviceConnected && (
+                    <Popover open={open} onOpenChange={setOpen}>
+                        <PopoverTrigger asChild>
+                            <Button
+                                className="flex items-center gap-1 py-2 px-4 rounded-xl font-semibold"
+                                disabled={isfftLoading || isPauseSate}
+                            >
+                                Channels
+                            </Button>
+                        </PopoverTrigger>
+
+                        <PopoverContent className="w-full p-3 space-y-2 mx-4 mb-2">
+                            <div id="button-container" className="relative space-y-2 rounded-lg">
+                                {Array.from({ length: 2 }).map((_, container) => (
+                                    <div key={container} className="grid grid-cols-8 gap-2">
+                                        {Array.from({ length: 8 }).map((_, col) => {
+                                            const index = container * 8 + col;
+                                            const isChannelDisabled = index >= maxCanvasElementCountRef.current;
+                                            const isSelected = selectedChannel === index + 1; // Changed to check against single selected channel
+                                            const buttonStyle = isChannelDisabled
+                                                ? isDarkModeEnabled
+                                                    ? { backgroundColor: "#030c21", color: "gray" }
+                                                    : { backgroundColor: "#e2e8f0", color: "gray" }
+                                                : isSelected
+                                                    ? { backgroundColor: getCustomColor(index, activeTheme), color: "white" }
+                                                    : { backgroundColor: "white", color: "black" };
+                                            const isFirstInRow = col === 0;
+                                            const isLastInRow = col === 7;
+                                            const isFirstContainer = container === 0;
+                                            const isLastContainer = container === 1;
+                                            const roundedClass = `
+                    ${isFirstInRow && isFirstContainer ? "rounded-tl-lg" : ""}
+                    ${isLastInRow && isFirstContainer ? "rounded-tr-lg" : ""}
+                    ${isFirstInRow && isLastContainer ? "rounded-bl-lg" : ""}
+                    ${isLastInRow && isLastContainer ? "rounded-br-lg" : ""}
+                `;
+
+                                            return (
+                                                <button
+                                                    key={index}
+                                                    onClick={() => !isChannelDisabled && setSelectedChannel(index + 1)} // Toggle single channel
+                                                    disabled={isChannelDisabled}
+                                                    style={buttonStyle}
+                                                    className={`w-full h-8 text-xs font-medium py-1 border border-gray-300 dark:border-gray-600 transition-colors duration-200 ${roundedClass}`}
+                                                >
+                                                    {`CH${index + 1}`}
+                                                </button>
+                                            );
+                                        })}
+                                    </div>
+                                ))}
                             </div>
                         </PopoverContent>
                     </Popover>
