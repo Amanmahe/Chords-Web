@@ -73,9 +73,8 @@ const NPG_Ble = () => {
     const linesRef = useRef<WebglLine[]>([]);
     const sweepPositions = useRef<number[]>(new Array(6).fill(0)); // Array for sweep positions
     const currentSweepPos = useRef<number[]>(new Array(6).fill(0)); // Array for sweep positions
-    const maxCanvasElementCountRef = useRef<number>(3);
+    const maxCanvasElementCountRef = useRef<number>(6);
     const channelNames = Array.from({ length: maxCanvasElementCountRef.current }, (_, i) => `CH${i + 1}`);
-    let numChannels = 6;
     const [selectedChannels, setSelectedChannels] = useState<number[]>([1]);
     const [manuallySelected, setManuallySelected] = useState(false); // New state to track manual selection
     const { theme } = useTheme(); // Current theme of the app
@@ -105,8 +104,8 @@ const NPG_Ble = () => {
             return; // Exit if the ref is null
         }
 
-        currentSweepPos.current = new Array(numChannels).fill(0);
-        sweepPositions.current = new Array(numChannels).fill(0);
+        currentSweepPos.current = new Array(maxCanvasElementCountRef.current).fill(0);
+        sweepPositions.current = new Array(maxCanvasElementCountRef.current).fill(0);
 
         // Clear existing child elements
         while (container.firstChild) {
@@ -248,7 +247,7 @@ const NPG_Ble = () => {
     useEffect(() => {
         createCanvasElements();
         setRefresh(r => r + 1);
-    }, [numChannels, theme, timeBase, selectedChannels, Zoom, isConnected]);
+    }, [maxCanvasElementCountRef.current, theme, timeBase, selectedChannels, Zoom, isConnected]);
     useEffect(() => {
         selectedChannelsRef.current = selectedChannels;
     }, [selectedChannels]);
@@ -368,7 +367,7 @@ const NPG_Ble = () => {
 
         channelData.push(sampleCounter);
         console.log(dataView);
-        for (let channel = 0; channel < numChannels; channel++) {
+        for (let channel = 0; channel < maxCanvasElementCountRef.current; channel++) {
             const sample = dataView.getInt16(1 + (channel * 2), false);
             channelData.push(
                 notchFiltersRef.current[channel].process(
@@ -421,9 +420,9 @@ const NPG_Ble = () => {
             console.log("Received event with no value.");
             return;
         }
-        if (currentSweepPos.current.length !== numChannels || !pauseRef.current) {
-            currentSweepPos.current = new Array(numChannels).fill(0);
-            sweepPositions.current = new Array(numChannels).fill(0);
+        if (currentSweepPos.current.length !== maxCanvasElementCountRef.current || !pauseRef.current) {
+            currentSweepPos.current = new Array(maxCanvasElementCountRef.current).fill(0);
+            sweepPositions.current = new Array(maxCanvasElementCountRef.current).fill(0);
         }
 
         const value = target.value;
@@ -1416,7 +1415,7 @@ const NPG_Ble = () => {
                                                     <div id="button-container" className="relative space-y-2 rounded-lg">
                                                         {Array.from({ length: 1 }).map((_, container) => (
                                                             <div key={container} className="grid grid-cols-8 gap-2">
-                                                                {Array.from({ length: 3 }).map((_, col) => {
+                                                                {Array.from({ length: maxCanvasElementCountRef.current }).map((_, col) => {
                                                                     const index = container * 8 + col;
                                                                     const isChannelDisabled = index >= maxCanvasElementCountRef.current;
                                                                     const isSelected = selectedChannels.includes(index + 1);
