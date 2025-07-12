@@ -75,7 +75,7 @@ const NPG_Ble = () => {
     const currentSweepPos = useRef<number[]>(new Array(6).fill(0)); // Array for sweep positions
     const maxCanvasElementCountRef = useRef<number>(3);
     const channelNames = Array.from({ length: maxCanvasElementCountRef.current }, (_, i) => `CH${i + 1}`);
-    let numChannels = 3;
+    let numChannels = 6;
     const [selectedChannels, setSelectedChannels] = useState<number[]>([1]);
     const [manuallySelected, setManuallySelected] = useState(false); // New state to track manual selection
     const { theme } = useTheme(); // Current theme of the app
@@ -326,7 +326,7 @@ const NPG_Ble = () => {
     const DATA_CHAR_UUID = "beb5483e-36e1-4688-b7f5-ea07361b26a8";
     const CONTROL_CHAR_UUID = "0000ff01-0000-1000-8000-00805f9b34fb";
 
-    const SINGLE_SAMPLE_LEN = 7; // Each sample is 10 bytes
+    const SINGLE_SAMPLE_LEN = 13; // Each sample is 10 bytes
     const BLOCK_COUNT = 10; // 10 samples batched per notification
     const NEW_PACKET_LEN = SINGLE_SAMPLE_LEN * BLOCK_COUNT; // 100 bytes
 
@@ -367,7 +367,7 @@ const NPG_Ble = () => {
         }
 
         channelData.push(sampleCounter);
-
+        console.log(dataView);
         for (let channel = 0; channel < numChannels; channel++) {
             const sample = dataView.getInt16(1 + (channel * 2), false);
             channelData.push(
@@ -469,7 +469,7 @@ const NPG_Ble = () => {
             setInterval(() => {
                 if (samplesReceivedRef.current === 0) {
                     disconnect();
-                    window.location.reload();
+                    // window.location.reload();
                 }
                 samplesReceivedRef.current = 0;
             }, 1000);

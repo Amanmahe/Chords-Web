@@ -189,7 +189,7 @@ export const BoardsList: ReadonlyArray<BoardConfig> = Object.freeze([
         device_name: "NPG-LITE",
         field_pid: 4097,
         adc_resolution: 12,
-        channel_count: 3,
+        channel_count: 6,
         baud_Rate: 230400,
         sampling_rate: 500,
     }),

@@ -1318,13 +1318,16 @@ const Connection: React.FC<ConnectionProps> = ({
 
                     if (syncIndex === -1) {
                         // If no sync bytes are found, clear the buffer and continue
+
                         buffer.length = 0; // Clear the buffer
                         continue;
+
                     }
 
                     if (syncIndex + PACKET_LENGTH <= buffer.length) {
                         // Check if a full packet is available in the buffer
                         const endByteIndex = syncIndex + PACKET_LENGTH - 1; // Calculate the index of the end byte
+                        console.log(buffer[syncIndex] === SYNC_BYTE1, buffer[syncIndex + 1] === SYNC_BYTE2, buffer[endByteIndex] === END_BYTE);
 
                         if (
                             buffer[syncIndex] === SYNC_BYTE1 &&
@@ -1352,6 +1355,8 @@ const Connection: React.FC<ConnectionProps> = ({
                                 );
 
                             }
+                                                            console.log(channelData);
+
                             datastream(channelData); // Pass the channel data to the LineData function for further processing
                             if (isRecordingRef.current) {
                                 const channeldatavalues = channelData
