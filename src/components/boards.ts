@@ -184,6 +184,15 @@ export const BoardsList: ReadonlyArray<BoardConfig> = Object.freeze([
         sampling_rate: 500,
         serial_timeout: HIGH_SPEED_TIMEOUT,
     }),
+        createBoardConfig({
+        chords_id: "ESP32-S3",
+        device_name: "ESP32-S3",
+        field_pid: 4097,
+        adc_resolution: 12,
+        channel_count: 16,
+        sampling_rate: 500,
+        serial_timeout: HIGH_SPEED_TIMEOUT,
+    }),
     createBoardConfig({
         chords_id: "NPG-LITE",
         device_name: "NPG-LITE",

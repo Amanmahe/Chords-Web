@@ -113,7 +113,7 @@ export class EXGFilter {
     }
 
     process(input: number, type: number): number {
-        if (!type) return input * this.yScale;
+        if (!type) return (input - 1 / this.yScale) * this.yScale;
         let output = input;
         let chData = 0;
         switch (this.currentSamplingRate) {
