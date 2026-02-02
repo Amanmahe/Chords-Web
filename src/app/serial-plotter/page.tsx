@@ -14,7 +14,7 @@ interface DataPoint {
 const channelColors = ["#F5A3B1", "#86D3ED", "#7CD6C8", "#C2B4E2", "#48d967", "#FFFF8C"];
 
 const SerialPlotter = () => {
-    const maxChannels = 6;
+    const maxChannels = 2;
     const [data, setData] = useState<DataPoint[]>([]);
     const [data2, setData2] = useState<DataPoint[]>([]);
     const [port, setPort] = useState<SerialPort | null>(null);
@@ -42,6 +42,7 @@ const SerialPlotter = () => {
     const SYNC_BYTE_2 = 0x7C;
     const blockSize = 9;
     const maxSamples = 256;
+    const shouldResetPlot = useRef(true);
 
     // Track if we're receiving comma-separated data
     const isCommaData = useRef(false);
@@ -141,7 +142,38 @@ const SerialPlotter = () => {
         return new ColorRGBA(r, g, b, 1);
     };
 
-    const connectToSerial = useCallback(async () => {
+    // const connectToSerial = useCallback(async () => {
+    //     try {
+    //         const ports = await (navigator as any).serial.getPorts();
+    //         let selectedPort = ports.length > 0 ? ports[0] : null;
+
+    //         if (!selectedPort) {
+    //             selectedPort = await (navigator as any).serial.requestPort();
+    //         }
+
+    //         await selectedPort.open({ baudRate: baudRateref.current });
+    //         setRawData("");
+    //         setData([]);
+    //         setData2([]);
+    //         setPort(selectedPort);
+    //         setIsConnected(true);
+    //         wglpRef.current = null;
+    //         linesRef.current = [];
+    //         selectedChannelsRef.current = [];
+    //         isCommaData.current = false;
+    //         readSerialData(selectedPort);
+
+    //         setTimeout(() => {
+    //             sweepPositions.current = new Array(maxChannels).fill(0);
+    //             setShowPlotterData(true);
+    //         }, 4000);
+    //     } catch (err) {
+    //         console.error("Error connecting to serial:", err);
+    //     }
+    // }, [baudRateref.current]);
+
+
+     const connectToSerial = useCallback(async () => {
         try {
             const ports = await (navigator as any).serial.getPorts();
             let selectedPort = ports.length > 0 ? ports[0] : null;
@@ -160,6 +192,11 @@ const SerialPlotter = () => {
             linesRef.current = [];
             selectedChannelsRef.current = [];
             isCommaData.current = false;
+            
+            // Reset plot state
+            shouldResetPlot.current = true;
+            sweepPositions.current = new Array(maxChannels).fill(0);
+            
             readSerialData(selectedPort);
 
             setTimeout(() => {
@@ -170,7 +207,6 @@ const SerialPlotter = () => {
             console.error("Error connecting to serial:", err);
         }
     }, [baudRateref.current]);
-
     const readSerialData = async (serialPort: SerialPort) => {
         const READ_TIMEOUT = 5000;
         const BATCH_SIZE = 10;
@@ -322,7 +358,71 @@ const SerialPlotter = () => {
         return () => clearInterval(interval);
     }, [port]);
 
-    const updateWebGLPlot = (newData: DataPoint[], newData2: DataPoint[]) => {
+    // const updateWebGLPlot = (newData: DataPoint[], newData2: DataPoint[]) => {
+    //     if (!wglpRef.current || linesRef.current.length === 0) return;
+        
+    //     // Combine data for scaling calculation
+    //     const allValues = [
+    //         ...newData.flatMap(dp => dp.values),
+    //         ...newData2.flatMap(dp => dp.values)
+    //     ];
+        
+    //     if (allValues.length === 0) return;
+        
+    //     const yMin = Math.min(...allValues);
+    //     const yMax = Math.max(...allValues);
+    //     const yRange = yMax - yMin || 1;
+
+    //     // Plot first dataset (line 0)
+    //     newData.forEach((dataPoint) => {
+    //         if (linesRef.current[0] && dataPoint.values.length > 0) {
+    //             const yValue = Math.max(-1, Math.min(1, ((dataPoint.values[0] - yMin) / yRange) * 2 - 1));
+                
+    //             if (sweepPositions.current[0] === undefined) {
+    //                 sweepPositions.current[0] = 0;
+    //             }
+
+    //             const currentPos = sweepPositions.current[0] % maxPoints;
+    //             if (!Number.isNaN(currentPos)) {
+    //                 try {
+    //                     linesRef.current[0].setY(currentPos, yValue);
+    //                 } catch (error) {
+    //                     console.error(`Error plotting data for line 0 at position ${currentPos}:`, error);
+    //                 }
+    //             }
+    //             sweepPositions.current[0] = (currentPos + 1) % maxPoints;
+    //         }
+    //     });
+
+    //     // Plot second dataset (line 1) if comma data is detected
+    //     if (isCommaData.current && linesRef.current[1]) {
+    //         newData2.forEach((dataPoint) => {
+    //             if (dataPoint.values.length > 0) {
+    //                 const yValue = Math.max(-1, Math.min(1, ((dataPoint.values[0] - yMin) / yRange) * 2 - 1));
+                    
+    //                 if (sweepPositions.current[1] === undefined) {
+    //                     sweepPositions.current[1] = 0;
+    //                 }
+
+    //                 const currentPos = sweepPositions.current[1] % maxPoints;
+    //                 if (!Number.isNaN(currentPos)) {
+    //                     try {
+    //                         linesRef.current[1].setY(currentPos, yValue);
+    //                     } catch (error) {
+    //                         console.error(`Error plotting data for line 1 at position ${currentPos}:`, error);
+    //                     }
+    //                 }
+    //                 sweepPositions.current[1] = (currentPos + 1) % maxPoints;
+    //             }
+    //         });
+    //     }
+
+    //     requestAnimationFrame(() => {
+    //         if (wglpRef.current) wglpRef.current.update();
+    //     });
+    // };
+
+     const updateWebGLPlot = (newData: DataPoint[], newData2: DataPoint[]) => {
         if (!wglpRef.current || linesRef.current.length === 0) return;
         
         // Combine data for scaling calculation
@@ -337,6 +437,19 @@ const SerialPlotter = () => {
         const yMax = Math.max(...allValues);
         const yRange = yMax - yMin || 1;
 
+        // Reset plot positions if needed
+        if (shouldResetPlot.current) {
+            sweepPositions.current = new Array(maxChannels).fill(0);
+            shouldResetPlot.current = false;
+            
+            // Clear all lines
+            linesRef.current.forEach(line => {
+                for (let i = 0; i < maxPoints; i++) {
+                    line.setY(i, 0);
+                }
+            });
+        }
+
         // Plot first dataset (line 0)
         newData.forEach((dataPoint) => {
             if (linesRef.current[0] && dataPoint.values.length > 0) {
@@ -346,7 +459,8 @@ const SerialPlotter = () => {
                     sweepPositions.current[0] = 0;
                 }
 
-                const currentPos = sweepPositions.current[0] % maxPoints;
+                const currentPos = sweepPositions.current[0];
+                
                 if (!Number.isNaN(currentPos)) {
                     try {
                         linesRef.current[0].setY(currentPos, yValue);
@@ -354,7 +468,14 @@ const SerialPlotter = () => {
                         console.error(`Error plotting data for line 0 at position ${currentPos}:`, error);
                     }
                 }
+                
+                // Increment position and wrap around if needed
                 sweepPositions.current[0] = (currentPos + 1) % maxPoints;
+                
+                // If we've wrapped around, reset the plot on next update
+                if (sweepPositions.current[0] === 0) {
+                    shouldResetPlot.current = true;
+                }
             }
         });
 
@@ -368,7 +489,8 @@ const SerialPlotter = () => {
                         sweepPositions.current[1] = 0;
                     }
 
-                    const currentPos = sweepPositions.current[1] % maxPoints;
+                    const currentPos = sweepPositions.current[1];
+                    
                     if (!Number.isNaN(currentPos)) {
                         try {
                             linesRef.current[1].setY(currentPos, yValue);
@@ -376,7 +498,14 @@ const SerialPlotter = () => {
                             console.error(`Error plotting data for line 1 at position ${currentPos}:`, error);
                         }
                     }
+                    
+                    // Increment position and wrap around if needed
                     sweepPositions.current[1] = (currentPos + 1) % maxPoints;
+                    
+                    // If we've wrapped around, reset the plot on next update
+                    if (sweepPositions.current[1] === 0) {
+                        shouldResetPlot.current = true;
+                    }
                 }
             });
         }
@@ -385,7 +514,6 @@ const SerialPlotter = () => {
             if (wglpRef.current) wglpRef.current.update();
         });
     };
-
     const disconnectSerial = async () => {
         if (reader) {
             await reader.cancel();

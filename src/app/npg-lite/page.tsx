@@ -73,10 +73,8 @@ const NPG_Ble = () => {
     const linesRef = useRef<WebglLine[]>([]);
     const sweepPositions = useRef<number[]>(new Array(6).fill(0)); // Array for sweep positions
     const currentSweepPos = useRef<number[]>(new Array(6).fill(0)); // Array for sweep positions
-    const maxCanvasElementCountRef = useRef<number>(3);
-    const blockCountRef = useRef<number>(10);
-    const adcResRef = useRef<number>(12);
-    const channelNames = Array.from({ length: maxCanvasElementCountRef.current }, (_, i) => `CH${i}`);
+    const maxCanvasElementCountRef = useRef<number>(6);
+    const channelNames = Array.from({ length: maxCanvasElementCountRef.current }, (_, i) => `CH${i + 1}`);
     const [selectedChannels, setSelectedChannels] = useState<number[]>([1]);
     const [manuallySelected, setManuallySelected] = useState(false); // New state to track manual selection
     const { theme } = useTheme(); // Current theme of the app
@@ -319,27 +317,6 @@ const NPG_Ble = () => {
     }, [timeBase]);
     const zoomRef = useRef(Zoom);
 
-    const handleConfig = (event: Event) => {
-        console.log("Received config packet");
-        const characteristic = event.target as BluetoothRemoteGATTCharacteristicExtended;
-        const value = characteristic.value;
-        if (!value || value.byteLength !== 8) {
-            console.log("Invalid config packet length:", value?.byteLength);
-            return;
-        }
-        const numChannels = value.getUint16(0, true);
-        const blockCount = value.getUint16(2, true);
-        const sampRate = value.getUint16(4, true);
-        const adcRes = value.getUint16(6, true);
-        maxCanvasElementCountRef.current = numChannels;
-        sampingrateref.current = sampRate;
-        blockCountRef.current = blockCount;
-        adcResRef.current = adcRes;
-        console.log("Config received:", { numChannels: maxCanvasElementCountRef.current, sampingrateref: sampingrateref.current, blockCountRef: blockCountRef.current, adcResRef: adcResRef.current });
-
-
-        console.log("Config:", { numChannels, blockCount, sampRate, adcRes });
-    };
     useEffect(() => {
         zoomRef.current = Zoom;
     }, [Zoom]);
@@ -348,44 +325,30 @@ const NPG_Ble = () => {
     const DATA_CHAR_UUID = "beb5483e-36e1-4688-b7f5-ea07361b26a8";
     const CONTROL_CHAR_UUID = "0000ff01-0000-1000-8000-00805f9b34fb";
 
-    // const SINGLE_SAMPLE_LEN = useMemo(() => maxCanvasElementCountRef.current * 2 + 1, [maxCanvasElementCountRef.current]);
-    // const NEW_PACKET_LEN = useMemo(() => SINGLE_SAMPLE_LEN * 20, [SINGLE_SAMPLE_LEN]);
+    const SINGLE_SAMPLE_LEN = 13; // Each sample is 10 bytes
+    const BLOCK_COUNT = 10; // 10 samples batched per notification
+    const NEW_PACKET_LEN = SINGLE_SAMPLE_LEN * BLOCK_COUNT; // 100 bytes
 
 
 
     let prevSampleCounter: number | null = null;
     let channelData: number[] = [];
+    const notchFiltersRef   = useRef(Array.from({ length: maxCanvasElementCountRef.current }, () => new Notch()));
+    const exgFiltersRef     = useRef(Array.from({ length: maxCanvasElementCountRef.current }, () => new EXGFilter()));
+    const pointoneFilterRef = useRef(Array.from({ length: maxCanvasElementCountRef.current }, () => new HighPassFilter()));
+    notchFiltersRef.current.forEach((filter) => {
+        filter.setbits(sampingrateref.current);
+    });
+    exgFiltersRef.current.forEach((filter) => {
+        filter.setbits("12", sampingrateref.current);
+    });
+    pointoneFilterRef.current.forEach((filter) => {
+        filter.setSamplingRate(sampingrateref.current);
+    });
 
-    const notchFiltersRef = useRef<Notch[]>([]);
-    const exgFiltersRef = useRef<EXGFilter[]>([]);
-    const pointoneFilterRef = useRef<HighPassFilter[]>([]);
-
-    useEffect(() => {
-        // Initialize the arrays if needed
-        if (notchFiltersRef.current.length !== maxCanvasElementCountRef.current) {
-            notchFiltersRef.current = Array.from({ length: maxCanvasElementCountRef.current }, () => new Notch());
-        }
-        if (exgFiltersRef.current.length !== maxCanvasElementCountRef.current) {
-            exgFiltersRef.current = Array.from({ length: maxCanvasElementCountRef.current }, () => new EXGFilter());
-        }
-        if (pointoneFilterRef.current.length !== maxCanvasElementCountRef.current) {
-            pointoneFilterRef.current = Array.from({ length: maxCanvasElementCountRef.current }, () => new HighPassFilter());
-        }
-
-        // Configure filters
-        notchFiltersRef.current.forEach((filter) => {
-            filter.setbits(sampingrateref.current);
-        });
-        exgFiltersRef.current.forEach((filter) => {
-            filter.setbits(adcResRef.current.toString(), sampingrateref.current);
-        });
-        pointoneFilterRef.current.forEach((filter) => {
-            filter.setSamplingRate(sampingrateref.current);
-        });
-    }, [maxCanvasElementCountRef.current, sampingrateref.current, adcResRef.current, blockCountRef.current]);
     // Inside your component
     const processSample = useCallback((dataView: DataView): void => {
-        if (dataView.byteLength !== (maxCanvasElementCountRef.current * 2 + 1)) {
+        if (dataView.byteLength !== SINGLE_SAMPLE_LEN) {
             console.log("Unexpected sample length: " + dataView.byteLength);
             return;
         }
@@ -403,8 +366,7 @@ const NPG_Ble = () => {
         }
 
         channelData.push(sampleCounter);
-        // console.log(dataView);
-        console.log(maxCanvasElementCountRef.current);
+        console.log(dataView);
         for (let channel = 0; channel < maxCanvasElementCountRef.current; channel++) {
             const sample = dataView.getInt16(1 + (channel * 2), false);
             channelData.push(
@@ -452,25 +414,18 @@ const NPG_Ble = () => {
         value?: DataView;
     }
 
-    const handleNotification = useCallback((event: Event): void => {
+    function handleNotification(event: Event): void {
         const target = event.target as BluetoothRemoteGATTCharacteristicExtended;
-
         if (!target.value) {
             console.log("Received event with no value.");
             return;
         }
-
-        if (
-            currentSweepPos.current.length !== maxCanvasElementCountRef.current ||
-            !pauseRef.current
-        ) {
+        if (currentSweepPos.current.length !== maxCanvasElementCountRef.current || !pauseRef.current) {
             currentSweepPos.current = new Array(maxCanvasElementCountRef.current).fill(0);
             sweepPositions.current = new Array(maxCanvasElementCountRef.current).fill(0);
         }
 
         const value = target.value;
-        const SINGLE_SAMPLE_LEN = (maxCanvasElementCountRef.current * 2 + 1);
-        const NEW_PACKET_LEN = SINGLE_SAMPLE_LEN * blockCountRef.current;
         if (value.byteLength === NEW_PACKET_LEN) {
             for (let i = 0; i < NEW_PACKET_LEN; i += SINGLE_SAMPLE_LEN) {
                 const sampleBuffer = value.buffer.slice(i, i + SINGLE_SAMPLE_LEN);
@@ -482,96 +437,47 @@ const NPG_Ble = () => {
         } else {
             console.log("Unexpected packet length: " + value.byteLength);
         }
-    }, [
-        maxCanvasElementCountRef,  // if these are refs, they don't need to be in deps
-        pauseRef,
-        currentSweepPos,
-        sweepPositions,
-        processSample,
-        blockCountRef, maxCanvasElementCountRef.current, sampingrateref.current, adcResRef.current, appliedFiltersRef, appliedEXGFiltersRef
-    ]);
-
-
-
+    }
     const connectedDeviceRef = useRef<any | null>(null); // UseRef for device tracking
-
-async function connectBLE(): Promise<void> {
-    try {
-        setIsLoading(true);
-        const nav = navigator as any;
-
-        if (!nav.bluetooth) {
-            console.log("Web Bluetooth API is not available in this browser.");
-            setIsLoading(false);
-            return;
-        }
-
-        const device = await nav.bluetooth.requestDevice({
-            filters: [{ namePrefix: "NPG" }],
-            optionalServices: [SERVICE_UUID],
-        });
-
-        const server = await device.gatt?.connect();
-        if (!server) {
-            setIsLoading(false);
-            return;
-        }
-
-        connectedDeviceRef.current = device;
-
-        const service = await server.getPrimaryService(SERVICE_UUID);
-        const controlChar = await service.getCharacteristic(CONTROL_CHAR_UUID);
-        const dataChar = await service.getCharacteristic(DATA_CHAR_UUID);
-
-        // Try to get config, but proceed with defaults if it fails
+    async function connectBLE(): Promise<void> {
         try {
-            console.log("Requesting config...");
-            await controlChar.startNotifications();
-            
-            const configHandler = (event: Event) => {
-                handleConfig(event);
-                // Remove the listener after receiving config
-                controlChar.removeEventListener("characteristicvaluechanged", configHandler);
-            };
-            
-            controlChar.addEventListener("characteristicvaluechanged", configHandler);
-            
-            const encoder = new TextEncoder();
-            await controlChar.writeValue(encoder.encode("CONFIG"));
-            
-            // Wait a short time for config response
-            await new Promise(resolve => setTimeout(resolve, 500));
-        } catch (error) {
-            console.log("Config not supported, using defaults:", error);
-            // Set default values if config fails
-          
-        }
 
-        // Proceed with data collection regardless of config
-        try {
+            setIsLoading(true);
+            const nav = navigator as any;
+            if (!nav.bluetooth) {
+                console.log("Web Bluetooth API is not available in this browser.");
+                return;
+            }
+            const device = await nav.bluetooth.requestDevice({
+                filters: [{ namePrefix: "NPG" }],
+                optionalServices: [SERVICE_UUID],
+            });
+            const server = await device.gatt?.connect();
+            if (!server) {
+                return;
+            }
+            connectedDeviceRef.current = device;
+            const service = await server.getPrimaryService(SERVICE_UUID);
+            const controlChar = await service.getCharacteristic(CONTROL_CHAR_UUID);
+            const dataChar = await service.getCharacteristic(DATA_CHAR_UUID);
             const encoder = new TextEncoder();
             await controlChar.writeValue(encoder.encode("START"));
             await dataChar.startNotifications();
             dataChar.addEventListener("characteristicvaluechanged", handleNotification);
-            
             setIsConnected(true);
-            setIsLoading(false);
-            
-            // Update UI with the current configuration
-            createCanvasElements();
+            setInterval(() => {
+                if (samplesReceivedRef.current === 0) {
+                    disconnect();
+                    // window.location.reload();
+                }
+                samplesReceivedRef.current = 0;
+            }, 1000);
         } catch (error) {
-            console.log("Error starting data collection:", error);
+            console.log("Error: " + (error instanceof Error ? error.message : error));
             setIsLoading(false);
-            toast.error("Failed to start data collection");
+
         }
-
-    } catch (error) {
-        console.log("Connection error:", error instanceof Error ? error.message : error);
-        setIsLoading(false);
-        toast.error("Connection failed");
     }
-}
-
 
     async function disconnect(): Promise<void> {
         try {
@@ -1530,9 +1436,9 @@ async function connectBLE(): Promise<void> {
                                                                     const isFirstContainer = container === 0;
                                                                     const isLastContainer = container === 1;
                                                                     const roundedClass = `
-                                   ${isFirstInRow && isFirstContainer ? "rounded-tl-lg" : ""}
-                                   ${isLastInRow && isFirstContainer ? "rounded-tr-lg" : ""}
-                                   ${isFirstInRow && isLastContainer ? "rounded-bl-lg" : ""}
+                                   ${isFirstInRow && isFirstContainer ? "rounded-tl-lg" : ""} 
+                                   ${isLastInRow && isFirstContainer ? "rounded-tr-lg" : ""} 
+                                   ${isFirstInRow && isLastContainer ? "rounded-bl-lg" : ""} 
                                    ${isLastInRow && isLastContainer ? "rounded-br-lg" : ""}
                                  `;
 
