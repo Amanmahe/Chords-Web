@@ -44,10 +44,10 @@ import {
     Settings,
     Loader,
     Battery,
-    BatteryCharging,
     BatteryLow,
     BatteryMedium,
-    BatteryFull
+    BatteryFull,
+    BatteryWarning
 } from "lucide-react";
 import { lightThemeColors, darkThemeColors, getCustomColor } from '@/components/Colors';
 import { useTheme } from "next-themes";
@@ -69,6 +69,7 @@ const defaultConfig: DeviceConfig = {
 
 const NPG_Ble = () => {
     const isRecordingRef = useRef<boolean>(false); // Ref to track if the device is recording
+    const isOldfirmwareRef = useRef<boolean>(false); // Ref to track if the device has old firmware
     const [isDisplay, setIsDisplay] = useState<boolean>(true); // Display state
     const [isRecord, setIsrecord] = useState<boolean>(true); // Display state
     const [isEndTimePopoverOpen, setIsEndTimePopoverOpen] = useState(false);
@@ -402,6 +403,7 @@ const NPG_Ble = () => {
                 hasBattery: true,
                 name
             };
+            isOldfirmwareRef.current = false; // Mark as new firmware if 3CH device is detected
             console.log("3CH device connected");
         } else if (name.includes("6CH")) {
             newConfig = {
@@ -411,6 +413,7 @@ const NPG_Ble = () => {
                 name
             };
             console.log("6CH device connected");
+            isOldfirmwareRef.current = false; // Mark as new firmware if 6CH device is detected 
             console.log(newConfig);
         } else {
             newConfig = {
@@ -420,6 +423,7 @@ const NPG_Ble = () => {
                 name
             };
             console.log("Unknown device, defaulting to 3CH configuration");
+            isOldfirmwareRef.current = true; // Mark as old firmware if device name doesn't match known patterns
         }
 
         // Update both ref and state
@@ -569,6 +573,9 @@ const NPG_Ble = () => {
     const connectedDeviceRef = useRef<any | null>(null); // UseRef for device tracking
     const batteryCharacteristicRef = useRef<any | null>(null); // Ref for battery characteristic
 
+    const disconnectIntervalRef = useRef<NodeJS.Timeout | null>(null);
+
+    // Update the connectBLE function
     async function connectBLE(): Promise<void> {
         try {
             setIsLoading(true);
@@ -624,8 +631,21 @@ const NPG_Ble = () => {
             setIsConnected(true);
             setIsLoading(false);
 
-            setInterval(() => {
+            // Clear any existing interval first
+            if (disconnectIntervalRef.current) {
+                clearInterval(disconnectIntervalRef.current);
+                disconnectIntervalRef.current = null;
+            }
+
+            // Create new interval for monitoring samples
+            disconnectIntervalRef.current = setInterval(() => {
                 if (samplesReceivedRef.current === 0) {
+                    console.log("No samples received in 1 second, disconnecting...");
+                    // Clear the interval before calling disconnect
+                    if (disconnectIntervalRef.current) {
+                        clearInterval(disconnectIntervalRef.current);
+                        disconnectIntervalRef.current = null;
+                    }
                     disconnect();
                 }
                 samplesReceivedRef.current = 0;
@@ -636,50 +656,117 @@ const NPG_Ble = () => {
         }
     }
 
+
     async function disconnect(): Promise<void> {
         try {
+            setIsLoading(true); // Show loading while disconnecting
+            if (disconnectIntervalRef.current) {
+                clearInterval(disconnectIntervalRef.current);
+                disconnectIntervalRef.current = null;
+            }
+
+            // Clear any existing timeouts/intervals
+            if (samplesReceivedRef.current > 0) {
+                // Clear the interval that checks for samples
+                const checkInterval = setInterval(() => { });
+                clearInterval(checkInterval);
+            }
+
             if (!connectedDeviceRef.current) {
                 console.log("No connected device to disconnect.");
+                setIsLoading(false);
                 return;
             }
 
             const server = connectedDeviceRef.current.gatt;
             if (!server) {
+                setIsLoading(false);
                 return;
             }
 
-            if (!server.connected) {
+            try {
+                // Only try to stop notifications if server is connected
+                if (server.connected) {
+                    const service = await server.getPrimaryService(SERVICE_UUID);
+
+                    // Stop data notifications
+                    try {
+                        const dataChar = await service.getCharacteristic(DATA_CHAR_UUID);
+                        await dataChar.stopNotifications();
+                        dataChar.removeEventListener("characteristicvaluechanged", handleNotification);
+                    } catch (error) {
+                        console.log("Error stopping data notifications:", error);
+                    }
+
+                    // Stop battery notifications if enabled
+                    if (batteryCharacteristicRef.current) {
+                        try {
+                            await batteryCharacteristicRef.current.stopNotifications();
+                            batteryCharacteristicRef.current.removeEventListener("characteristicvaluechanged", handleBatteryUpdate);
+                        } catch (error) {
+                            console.log("Error stopping battery notifications:", error);
+                        }
+                        batteryCharacteristicRef.current = null;
+                    }
+
+                    // Send stop command if control characteristic exists
+                    try {
+                        const controlChar = await service.getCharacteristic(CONTROL_CHAR_UUID);
+                        const encoder = new TextEncoder();
+                        await controlChar.writeValue(encoder.encode("STOP"));
+                    } catch (error) {
+                        console.log("Error sending STOP command:", error);
+                    }
+
+                    // Disconnect from device
+                    server.disconnect();
+                }
+            } catch (error) {
+                console.log("Error during cleanup:", error);
+            } finally {
+                // Reset all states and refs
                 connectedDeviceRef.current = null;
                 setIsConnected(false);
                 setBatteryLevel(null);
                 setDeviceName("");
-                return;
+
+                // Reset device configuration to defaults
+                deviceConfigRef.current = defaultConfig;
+                setDeviceConfig(defaultConfig);
+
+                // Reset sample tracking
+                prevSampleCounter = null;
+                channelData = [];
+                samplesReceivedRef.current = 0;
+
+                // Reset recording state
+                isRecordingRef.current = false;
+                setIsrecord(true);
+                setRecordingElapsedTime(0);
+
+                // Reset UI states
+                setIsDisplay(true);
+                pauseRef.current = true;
+
+                // Clear buffers
+                recordingBuffers.forEach(buffer => buffer.length = 0);
+                activeBufferIndex = 0;
+                fillingindex.current = 0;
+
+                // Clear lines and sweep positions
+                linesRef.current = [];
+                sweepPositions.current = new Array(6).fill(0);
+                currentSweepPos.current = new Array(6).fill(0);
+
+                // Force re-render
+                setRefreshKey(prev => prev + 1);
+
+                setIsLoading(false);
+                console.log("Disconnected successfully");
             }
-
-            const service = await server.getPrimaryService(SERVICE_UUID);
-            const dataChar = await service.getCharacteristic(DATA_CHAR_UUID);
-            await dataChar.stopNotifications();
-            dataChar.removeEventListener("characteristicvaluechanged", handleNotification);
-
-            // Stop battery notifications if enabled
-            if (batteryCharacteristicRef.current) {
-                await batteryCharacteristicRef.current.stopNotifications();
-                batteryCharacteristicRef.current = null;
-            }
-
-            server.disconnect(); // Disconnect the device
-
-            connectedDeviceRef.current = null; // Clear the global reference
-            setIsConnected(false);
-            setBatteryLevel(null);
-            setDeviceName("");
-
-            // Reset device configuration to defaults
-            deviceConfigRef.current = defaultConfig;
-            setDeviceConfig(defaultConfig);
-            setRefreshKey(prev => prev + 1);
         } catch (error) {
             console.log("Error during disconnection: " + (error instanceof Error ? error.message : error));
+            setIsLoading(false);
         }
     }
 
@@ -1068,23 +1155,41 @@ const NPG_Ble = () => {
 
     // Function to get battery icon based on level
     const getBatteryIcon = (level: number | null) => {
-        if (level === null) return null;
+        if (level === null) return <BatteryWarning size={30} />;
 
-        if (level <= 20) return <BatteryLow className="h-5 w-5" />;
-        if (level <= 50) return <BatteryMedium className="h-5 w-5" />;
-        if (level <= 80) return <Battery className="h-5 w-5" />;
-        return <BatteryFull className="h-5 w-5" />;
+        if (level < 10) return <Battery
+            size={30}
+            className="text-red-500 animate-blink" // or animate-pulse-fast
+        />;
+        if (level <= 20.0 && level > 10.0) return <BatteryLow size={30} />;
+        if (level <= 70.0 && level > 20.0) return <BatteryMedium size={30} />;
+        if (level > 70) return <BatteryFull size={30} />;
+        return <BatteryFull size={30} />;
     };
+
+    useEffect(() => {
+        if (batteryLevel === null) return;
+        if (batteryLevel < 10) {
+            toast.error("Very low battery! Please recharge immediately.");
+        } else if (batteryLevel === 20) {
+            toast.warning("Battery is low at " + batteryLevel + "%. Consider recharging soon.");
+        } else if (batteryLevel === 70) {
+            toast.success("Battery level is " + batteryLevel + "%.");
+        } else if (batteryLevel === 99) {
+            toast.success("Battery fully charged.");
+        }
+
+    }, [batteryLevel]);
 
     // Function to get battery color based on level
     const getBatteryColor = (level: number | null) => {
-        if (level === null) return "text-gray-500";
+        if (level === null) return "text-red-500";
 
-        if (level <= 20) return "text-red-500";
-        if (level <= 50) return "text-yellow-500";
+        if (level <= 20.0 && level > 10.0) return "text-red-500";
+        if (level <= 70.0 && level > 20.0) return "text-orange-500";
+        if (level > 70) return "text-green-500";
         return "text-green-500";
     };
-
 
     return (
         <div className="flex flex-col h-screen m-0 p-0 bg-g ">
@@ -1568,11 +1673,11 @@ const NPG_Ble = () => {
                     </Popover>
                     <Popover>
                         <PopoverTrigger asChild>
-                            <Button className="flex items-center justify-center select-none whitespace-nowrap rounded-lg">
+                            <Button className="flex items-center justify-center select-none whitespace-nowrap rounded-xl">
                                 <Settings size={16} />
                             </Button>
                         </PopoverTrigger>
-                        <PopoverContent className="w-[30rem] p-4 rounded-md shadow-md text-sm">
+                        <PopoverContent className="w-[30rem] p-4 mx-4 mb-2 rounded-md shadow-md text-sm">
                             <TooltipProvider>
                                 <div className={`space-y-6 ${!isDisplay ? "flex justify-center" : ""}`}>
                                     {/* Channel Selection */}
@@ -1731,14 +1836,72 @@ const NPG_Ble = () => {
                         </PopoverContent>
                     </Popover>
                     {/* Battery display when connected and has battery */}
-                    {isConnected && deviceConfig.hasBattery && batteryLevel !== null && (
-                        <div className="flex items-center space-x-2 ml-1">
-                            <div className={`flex items-center ${getBatteryColor(batteryLevel)}`}>
+                    <Popover>
+
+                        <PopoverTrigger asChild>
+                            <Button
+                                className={
+                                    `flex items-center justify-center select-none whitespace-nowrap rounded-lg ${getBatteryColor(batteryLevel)}`
+                                }
+                            >
                                 {getBatteryIcon(batteryLevel)}
-                                <span className="ml-1 text-sm font-medium">{batteryLevel}%</span>
-                            </div>
-                        </div>
-                    )}
+
+                            </Button>
+
+                        </PopoverTrigger>
+                        <PopoverContent className="w-fit p-2 mb-2 rounded-md shadow-md text-sm">
+
+                            {!isConnected ? (
+                                <div className=" ">
+                                    <p className="text-lg font-semibold">Device Not Connected!</p>
+                                    <p className="text-sm">Please connect your device to view battery status.</p>
+                                </div>
+                            ) : (
+                                <>
+                                    {isOldfirmwareRef.current ? (
+                                        <div className="mb-2 p-2">
+                                            <p className="text-lg font-semibold">Old Firmware Detected</p>
+
+                                            <p className="text-sm">
+                                                Update firmware using <a
+                                                    className="font-semibold text-blue-600 hover:underline"
+                                                    href="https://github.com/upsidedownlabs/NPG-Lite-Arduino-Firmware"
+                                                    target="_blank"
+                                                    rel="noopener noreferrer"
+                                                >
+                                                    NPG Lite Flasher
+                                                </a>.
+                                            </p>
+                                        </div>
+                                    ) : (
+                                        <>
+                                            {batteryLevel === null ? (
+                                                <div className="p-1">
+                                                    <p className="text-sm font-semibold">Calibrating...</p>
+                                                </div>
+                                            ) : (
+                                                <div className="flex flex-col space-y-2">
+                                                    <div className="flex items-center space-x-2">
+                                                        {getBatteryIcon(batteryLevel)}
+                                                        <span className="font-semibold">{batteryLevel}%</span>
+                                                    </div>
+
+                                                    {batteryLevel < 10 && (
+                                                        <span className="text-sm text-red-500 animate-blink">
+                                                            Low Battery
+                                                        </span>
+                                                    )}
+                                                </div>
+                                            )}
+                                        </>
+                                    )}
+                                </>
+                            )}
+
+
+                        </PopoverContent>
+                    </Popover>
+
                 </div>
             </div>
         </div>
