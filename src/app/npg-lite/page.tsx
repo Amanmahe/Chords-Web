@@ -698,17 +698,6 @@ const NPG_Ble = () => {
                         console.log("Error stopping data notifications:", error);
                     }
 
-                    // Stop battery notifications if enabled
-                    if (batteryCharacteristicRef.current) {
-                        try {
-                            await batteryCharacteristicRef.current.stopNotifications();
-                            batteryCharacteristicRef.current.removeEventListener("characteristicvaluechanged", handleBatteryUpdate);
-                        } catch (error) {
-                            console.log("Error stopping battery notifications:", error);
-                        }
-                        batteryCharacteristicRef.current = null;
-                    }
-
                     // Send stop command if control characteristic exists
                     try {
                         const controlChar = await service.getCharacteristic(CONTROL_CHAR_UUID);
@@ -1157,7 +1146,7 @@ const NPG_Ble = () => {
     const getBatteryIcon = (level: number | null) => {
         if (level === null) return <BatteryWarning size={30} />;
 
-        if (level < 10) return <Battery
+        if (level <=  10) return <Battery
             size={30}
             className="text-red-500 animate-blink" // or animate-pulse-fast
         />;
@@ -1169,8 +1158,19 @@ const NPG_Ble = () => {
 
     useEffect(() => {
         if (batteryLevel === null) return;
-        if (batteryLevel < 10) {
+
+        let intervalId: number | undefined;
+
+        // Handle battery level checks
+        if (batteryLevel <= 10) {
+            // Show immediate notification
             toast.error("Very low battery! Please recharge immediately.");
+
+            // Set up interval to show notification every minute
+            intervalId = window.setInterval(() => {
+                toast.error("Very low battery! Please recharge immediately.");
+            }, 60000); // 60000ms = 1 minute
+
         } else if (batteryLevel === 20) {
             toast.warning("Battery is low at " + batteryLevel + "%. Consider recharging soon.");
         } else if (batteryLevel === 70) {
@@ -1178,6 +1178,13 @@ const NPG_Ble = () => {
         } else if (batteryLevel === 99) {
             toast.success("Battery fully charged.");
         }
+
+        // Cleanup function to clear interval when batteryLevel changes or component unmounts
+        return () => {
+            if (intervalId) {
+                clearInterval(intervalId);
+            }
+        };
 
     }, [batteryLevel]);
 
