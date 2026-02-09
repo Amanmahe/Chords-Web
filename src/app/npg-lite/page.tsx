@@ -404,7 +404,6 @@ const NPG_Ble = () => {
                 name
             };
             isOldfirmwareRef.current = false; // Mark as new firmware if 3CH device is detected
-            console.log("3CH device connected");
         } else if (name.includes("6CH")) {
             newConfig = {
                 maxChannels: 6,
@@ -412,9 +411,7 @@ const NPG_Ble = () => {
                 hasBattery: true,
                 name
             };
-            console.log("6CH device connected");
             isOldfirmwareRef.current = false; // Mark as new firmware if 6CH device is detected 
-            console.log(newConfig);
         } else {
             newConfig = {
                 maxChannels: 3,
@@ -422,7 +419,6 @@ const NPG_Ble = () => {
                 hasBattery: false,
                 name
             };
-            console.log("Unknown device, defaulting to 3CH configuration");
             isOldfirmwareRef.current = true; // Mark as old firmware if device name doesn't match known patterns
         }
 
@@ -466,7 +462,6 @@ const NPG_Ble = () => {
     // Inside your component
     const processSample = useCallback((dataView: DataView): void => {
         const config = deviceConfigRef.current;
-        console.log(config);
 
         if (dataView.byteLength !== config.sampleLength) {
             console.log("Unexpected sample length: " + dataView.byteLength);
@@ -547,14 +542,7 @@ const NPG_Ble = () => {
         }
 
         const config = deviceConfigRef.current;
-        console.log(config);
         const currentPacketLength = packetLengthRef.current;
-
-        console.log(config);
-        console.log("Current packet length:", currentPacketLength); if (currentSweepPos.current.length !== config.maxChannels || !pauseRef.current) {
-            currentSweepPos.current = new Array(config.maxChannels).fill(0);
-            sweepPositions.current = new Array(config.maxChannels).fill(0);
-        }
 
         const value = target.value;
         if (value.byteLength === currentPacketLength) {
@@ -751,7 +739,6 @@ const NPG_Ble = () => {
                 setRefreshKey(prev => prev + 1);
 
                 setIsLoading(false);
-                console.log("Disconnected successfully");
             }
         } catch (error) {
             console.log("Error during disconnection: " + (error instanceof Error ? error.message : error));
