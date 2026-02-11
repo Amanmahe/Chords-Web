@@ -1859,7 +1859,7 @@ const NPG_Ble = () => {
                                             <p className="text-sm">
                                                 Update firmware using <a
                                                     className="font-semibold text-blue-600 hover:underline"
-                                                    href="https://github.com/upsidedownlabs/NPG-Lite-Arduino-Firmware"
+                                                    href="https://upsidedownlabs.github.io/NPG-Lite-Flasher-Web"
                                                     target="_blank"
                                                     rel="noopener noreferrer"
                                                 >

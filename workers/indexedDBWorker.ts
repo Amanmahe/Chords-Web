@@ -3,6 +3,7 @@ import JSZip from 'jszip';
 // Global variables
 let canvasCount = 0;
 let selectedChannels: number[] = [];
+const CHUNK_SIZE = 1000; // Store data in chunks of 1000 arrays
 
 self.onmessage = async (event) => {
   const { action, data, filename, selectedChannels: channels } = event.data;
@@ -69,7 +70,6 @@ self.onmessage = async (event) => {
       } catch (error) {
         handleError(error instanceof Error ? error.message : 'Unknown error');
       }
-
       break;
 
     case 'deleteFile':
@@ -85,22 +85,46 @@ self.onmessage = async (event) => {
       handlePostMessage({ success: true, action: 'deleteAll' });
       break;
 
-
-
     default:
       handlePostMessage({ error: 'Invalid action' });
   }
 };
 
+// Interface for metadata
+interface FileMetadata {
+  filename: string;
+  totalChunks: number;
+  totalRecords: number;
+  lastUpdated: Date;
+  created: Date;
+}
+
 // Function to open IndexedDB
 const openIndexedDB = async (): Promise<IDBDatabase> => {
   return new Promise((resolve, reject) => {
-    const request = indexedDB.open("ChordsRecordings", 2);
+    const request = indexedDB.open("ChordsRecordings", 3); // Version bump
 
     request.onupgradeneeded = (event) => {
       const db = (event.target as IDBOpenDBRequest).result;
-      const store = db.createObjectStore("ChordsRecordings", { keyPath: "filename" });
-      store.createIndex("filename", "filename", { unique: true });
+      
+      // Create metadata store
+      if (!db.objectStoreNames.contains("FileMetadata")) {
+        const metadataStore = db.createObjectStore("FileMetadata", { keyPath: "filename" });
+        metadataStore.createIndex("filename", "filename", { unique: true });
+      }
+      
+      // Create data chunks store with composite key
+      if (!db.objectStoreNames.contains("DataChunks")) {
+        const chunksStore = db.createObjectStore("DataChunks", { 
+          keyPath: ["filename", "chunkIndex"] 
+        });
+        chunksStore.createIndex("byFilename", "filename", { unique: false });
+      }
+      
+      // Migrate existing data from old schema if needed
+      if (event.oldVersion < 2) {
+        // Handle migration from old schema if necessary
+      }
     };
 
     request.onsuccess = (event) => resolve((event.target as IDBOpenDBRequest).result);
@@ -119,47 +143,137 @@ const performIndexDBTransaction = async <T>(
   const store = tx.objectStore(storeName);
 
   try {
-    return await callback(store); // Await the callback directly
+    return await callback(store);
   } catch (error) {
     throw new Error(`Transaction failed: ${error}`);
   }
 };
 
-// Function to write data to IndexedDB
+// Function to get or create file metadata
+const getFileMetadata = async (db: IDBDatabase, filename: string): Promise<FileMetadata> => {
+  return performIndexDBTransaction(db, "FileMetadata", "readonly", (store) => {
+    return new Promise<FileMetadata>((resolve, reject) => {
+      const request = store.get(filename);
+      request.onsuccess = () => {
+        if (request.result) {
+          resolve(request.result);
+        } else {
+          // Create default metadata
+          resolve({
+            filename,
+            totalChunks: 0,
+            totalRecords: 0,
+            lastUpdated: new Date(),
+            created: new Date()
+          });
+        }
+      };
+      request.onerror = () => reject(request.error);
+    });
+  });
+};
+
+// Function to update file metadata
+const updateFileMetadata = async (db: IDBDatabase, metadata: FileMetadata): Promise<void> => {
+  return performIndexDBTransaction(db, "FileMetadata", "readwrite", (store) => {
+    return new Promise<void>((resolve, reject) => {
+      const request = store.put(metadata);
+      request.onsuccess = () => resolve();
+      request.onerror = () => reject(request.error);
+    });
+  });
+};
+
+// Function to write data to IndexedDB (optimized with chunking)
 const writeToIndexedDB = async (
   db: IDBDatabase,
   data: number[][],
   filename: string
 ): Promise<boolean> => {
   try {
-    const existingRecord = await performIndexDBTransaction(db, "ChordsRecordings", "readwrite", (store) => {
-      return new Promise<any>((resolve, reject) => {
-        const getRequest = store.get(filename);
-        getRequest.onsuccess = () => resolve(getRequest.result);
-        getRequest.onerror = () => reject(new Error("Error retrieving record"));
-      });
-    });
-
-    if (existingRecord) {
-      existingRecord.content.push(...data);
-      await performIndexDBTransaction(db, "ChordsRecordings", "readwrite", (store) => {
-        return new Promise<void>((resolve, reject) => {
-          const putRequest = store.put(existingRecord);
-          putRequest.onsuccess = () => resolve();
-          putRequest.onerror = () => reject(new Error("Error updating record"));
-        });
-      });
-    } else {
-      const newRecord = { filename, content: [...data] };
-      await performIndexDBTransaction(db, "ChordsRecordings", "readwrite", (store) => {
-        return new Promise<void>((resolve, reject) => {
-          const putRequest = store.put(newRecord);
-          putRequest.onsuccess = () => resolve();
-          putRequest.onerror = () => reject(new Error("Error inserting record"));
-        });
-      });
+    // Get or create metadata
+    const metadata = await getFileMetadata(db, filename);
+    
+    // Calculate which chunks we need to write
+    const startIndex = metadata.totalRecords;
+    const endIndex = startIndex + data.length;
+    const startChunk = Math.floor(startIndex / CHUNK_SIZE);
+    const endChunk = Math.floor((endIndex - 1) / CHUNK_SIZE);
+    
+    // Process each chunk
+    for (let chunkIndex = startChunk; chunkIndex <= endChunk; chunkIndex++) {
+      const chunkStart = chunkIndex * CHUNK_SIZE;
+      const chunkEnd = chunkStart + CHUNK_SIZE;
+      
+      // Calculate what portion of data goes into this chunk
+      const dataStart = Math.max(0, chunkStart - startIndex);
+      const dataEnd = Math.min(data.length, chunkEnd - startIndex);
+      
+      if (dataStart >= dataEnd) continue;
+      
+      const chunkData = data.slice(dataStart, dataEnd);
+      
+      // Get existing chunk or create new
+      const existingChunk = await performIndexDBTransaction(
+        db, 
+        "DataChunks", 
+        "readwrite", 
+        (store) => {
+          return new Promise<any>((resolve, reject) => {
+            const key = [filename, chunkIndex];
+            const request = store.get(key);
+            request.onsuccess = () => resolve(request.result);
+            request.onerror = () => reject(request.error);
+          });
+        }
+      );
+      
+      if (existingChunk) {
+        // Append to existing chunk
+        existingChunk.data.push(...chunkData);
+        
+        await performIndexDBTransaction(
+          db, 
+          "DataChunks", 
+          "readwrite", 
+          (store) => {
+            return new Promise<void>((resolve, reject) => {
+              const request = store.put(existingChunk);
+              request.onsuccess = () => resolve();
+              request.onerror = () => reject(request.error);
+            });
+          }
+        );
+      } else {
+        // Create new chunk
+        const newChunk = {
+          filename,
+          chunkIndex,
+          data: chunkData
+        };
+        
+        await performIndexDBTransaction(
+          db, 
+          "DataChunks", 
+          "readwrite", 
+          (store) => {
+            return new Promise<void>((resolve, reject) => {
+              const request = store.put(newChunk);
+              request.onsuccess = () => resolve();
+              request.onerror = () => reject(request.error);
+            });
+          }
+        );
+      }
     }
-
+    
+    // Update metadata
+    metadata.totalRecords += data.length;
+    metadata.totalChunks = Math.ceil(metadata.totalRecords / CHUNK_SIZE);
+    metadata.lastUpdated = new Date();
+    
+    await updateFileMetadata(db, metadata);
+    
     return true;
   } catch (error) {
     console.error("Error writing to IndexedDB:", error);
@@ -167,17 +281,63 @@ const writeToIndexedDB = async (
   }
 };
 
+// Function to read all data for a file
+const readFileData = async (db: IDBDatabase, filename: string): Promise<number[][]> => {
+  const metadata = await getFileMetadata(db, filename);
+  const allData: number[][] = [];
+  
+  // Read all chunks sequentially
+  for (let chunkIndex = 0; chunkIndex < metadata.totalChunks; chunkIndex++) {
+    const chunk = await performIndexDBTransaction(
+      db,
+      "DataChunks",
+      "readonly",
+      (store) => {
+        return new Promise<any>((resolve, reject) => {
+          const key = [filename, chunkIndex];
+          const request = store.get(key);
+          request.onsuccess = () => resolve(request.result);
+          request.onerror = () => reject(request.error);
+        });
+      }
+    );
+    
+    if (chunk && chunk.data) {
+      allData.push(...chunk.data);
+    }
+  }
+  
+  return allData;
+};
 
 // Function to get all data from IndexedDB
 const getAllDataFromIndexedDB = async (db: IDBDatabase): Promise<any[]> => {
   try {
-    return await performIndexDBTransaction(db, "ChordsRecordings", "readonly", (store) => {
-      return new Promise<any[]>((resolve, reject) => {
-        const request = store.getAll();
-        request.onsuccess = () => resolve(request.result);
-        request.onerror = (error) => reject(new Error(`Error retrieving data: ${error}`));
+    // Get all metadata
+    const allMetadata = await performIndexDBTransaction(
+      db, 
+      "FileMetadata", 
+      "readonly", 
+      (store) => {
+        return new Promise<FileMetadata[]>((resolve, reject) => {
+          const request = store.getAll();
+          request.onsuccess = () => resolve(request.result);
+          request.onerror = () => reject(request.error);
+        });
+      }
+    );
+    
+    // For each file, read its data
+    const result = [];
+    for (const metadata of allMetadata) {
+      const content = await readFileData(db, metadata.filename);
+      result.push({
+        filename: metadata.filename,
+        content
       });
-    });
+    }
+    
+    return result;
   } catch (error) {
     console.error("Error retrieving data from IndexedDB:", error);
     throw error;
@@ -191,10 +351,8 @@ const convertToCSV = (data: any[], canvasCount: number, selectedChannels: number
   // Generate the header dynamically for the selected channels
   const header = ["Counter", ...selectedChannels.map((channel) => `Channel${channel}`)];
 
-  // Create rows by filtering and mapping valid data
-    const rows = data
+  const rows = data
     .filter((item, index) => {
-      // Ensure each item is an array and has valid data
       if (!item || !Array.isArray(item) || item.length === 0) {
         console.warn(`Skipping invalid data at index ${index}:`, item);
         return false;
@@ -202,28 +360,24 @@ const convertToCSV = (data: any[], canvasCount: number, selectedChannels: number
       return true;
     })
     .map((item, index) => {
-      // Generate filtered row with Counter and selected channel data
       const filteredRow = [
         item[0], // Counter
         ...selectedChannels.map((channel, i) => {
           if (channel) {
-
             return item[i + 1];
           } else {
             console.warn(`Missing data for channel ${channel} in item ${index}:`, item);
-            return ""; // Default empty value for missing data
+            return "";
           }
         }),
       ];
 
       return filteredRow
-        .map((field) => (field !== undefined && field !== null ? JSON.stringify(field) : "")) // Ensure proper formatting
+        .map((field) => (field !== undefined && field !== null ? JSON.stringify(field) : ""))
         .join(",");
     });
 
-  // Combine header and rows into a CSV format
   const csvContent = [header.join(","), ...rows].join("\n");
-
   return csvContent;
 };
 
@@ -232,30 +386,34 @@ const saveAllDataAsZip = async (canvasCount: number, selectedChannels: number[])
   try {
     const db = await openIndexedDB();
 
-    const allData = await performIndexDBTransaction(db, "ChordsRecordings", "readonly", (store) => {
-      return new Promise<any[]>((resolve, reject) => {
-        const request = store.getAll();
-        request.onsuccess = () => resolve(request.result);
-        request.onerror = () => reject(request.error);
-      });
-    });
+    const allMetadata = await performIndexDBTransaction(
+      db,
+      "FileMetadata",
+      "readonly",
+      (store) => {
+        return new Promise<FileMetadata[]>((resolve, reject) => {
+          const request = store.getAll();
+          request.onsuccess = () => resolve(request.result);
+          request.onerror = () => reject(request.error);
+        });
+      }
+    );
 
-    if (!allData || allData.length === 0) {
+    if (!allMetadata || allMetadata.length === 0) {
       throw new Error("No data available to download.");
     }
 
     const zip = new JSZip();
 
-    allData.forEach((record) => {
+    for (const metadata of allMetadata) {
       try {
-        const csvData = convertToCSV(record.content, canvasCount, selectedChannels);
-        zip.file(record.filename, csvData);
+        const content = await readFileData(db, metadata.filename);
+        const csvData = convertToCSV(content, canvasCount, selectedChannels);
+        zip.file(metadata.filename, csvData);
       } catch (error) {
-        console.error(`Error processing record ${record.filename}:`, error);
+        console.error(`Error processing record ${metadata.filename}:`, error);
       }
-    });
-
-    // Worker must not access UI. Return the blob to the main thread instead.
+    }
 
     const content = await zip.generateAsync({ type: "blob" });
     return content;
@@ -274,27 +432,33 @@ const saveDataByFilename = async (
   try {
     const db = await openIndexedDB();
 
-    const record = await performIndexDBTransaction(db, "ChordsRecordings", "readonly", (store) => {
-      return new Promise<any>((resolve, reject) => {
-        const index = store.index("filename");
-        const getRequest = index.get(filename);
+    // Check if file exists
+    const metadata = await performIndexDBTransaction(
+      db,
+      "FileMetadata",
+      "readonly",
+      (store) => {
+        return new Promise<FileMetadata | undefined>((resolve, reject) => {
+          const request = store.get(filename);
+          request.onsuccess = () => resolve(request.result);
+          request.onerror = () => reject(request.error);
+        });
+      }
+    );
 
-        getRequest.onsuccess = () => resolve(getRequest.result);
-        getRequest.onerror = () => reject(new Error("Error retrieving record"));
-      });
-    });
-
-    if (!record || !Array.isArray(record.content)) {
-      throw new Error("No data found for the given filename or invalid data format.");
+    if (!metadata) {
+      throw new Error("No data found for the given filename.");
     }
 
-    // Validate the content structure
-    if (!record.content.every((item: any) => Array.isArray(item))) {
-      throw new Error("Content data contains invalid or non-array elements.");
+    // Read all data for this file
+    const content = await readFileData(db, filename);
+
+    if (!Array.isArray(content)) {
+      throw new Error("Invalid data format.");
     }
 
     try {
-      const csvData = convertToCSV(record.content, canvasCount, selectedChannels);
+      const csvData = convertToCSV(content, canvasCount, selectedChannels);
       const blob = new Blob([csvData], { type: "text/csv;charset=utf-8" });
       return blob;
     } catch (conversionError) {
@@ -309,7 +473,7 @@ const saveDataByFilename = async (
 
 // Function to get file count from IndexedDB
 const getFileCountFromIndexedDB = async (db: IDBDatabase): Promise<string[]> => {
-  return performIndexDBTransaction(db, "ChordsRecordings", "readonly", (store) => {
+  return performIndexDBTransaction(db, "FileMetadata", "readonly", (store) => {
     return new Promise<string[]>((resolve, reject) => {
       const filenames: string[] = [];
       const cursorRequest = store.openCursor();
@@ -334,33 +498,39 @@ const getFileCountFromIndexedDB = async (db: IDBDatabase): Promise<string[]> => 
 };
 
 const deleteFilesByFilename = async (filename: string) => {
-  const dbRequest = indexedDB.open("ChordsRecordings");
+  const dbRequest = indexedDB.open("ChordsRecordings", 3);
 
   return new Promise<void>((resolve, reject) => {
     dbRequest.onsuccess = async (event) => {
       const db = (event.target as IDBOpenDBRequest).result;
 
       try {
-        await performIndexDBTransaction(db, "ChordsRecordings", "readwrite", async (store) => {
-          if (!store.indexNames.contains("filename")) {
-            throw new Error("Index 'filename' does not exist.");
-          }
+        // Delete metadata
+        await performIndexDBTransaction(db, "FileMetadata", "readwrite", (store) => {
+          return new Promise<void>((resolveMeta, rejectMeta) => {
+            const request = store.delete(filename);
+            request.onsuccess = () => resolveMeta();
+            request.onerror = () => rejectMeta(request.error);
+          });
+        });
 
-          const index = store.index("filename");
-          const cursorRequest = index.openCursor(IDBKeyRange.only(filename));
+        // Delete all chunks for this file
+        await performIndexDBTransaction(db, "DataChunks", "readwrite", (store) => {
+          return new Promise<void>((resolveChunks, rejectChunks) => {
+            const index = store.index("byFilename");
+            const cursorRequest = index.openCursor(IDBKeyRange.only(filename));
 
-          return new Promise<void>((resolveCursor, rejectCursor) => {
             cursorRequest.onsuccess = (cursorEvent) => {
               const cursor = (cursorEvent.target as IDBRequest<IDBCursorWithValue>).result;
               if (cursor) {
                 cursor.delete();
-                resolveCursor();
+                cursor.continue();
               } else {
-                resolveCursor(); // No file found, still resolve
+                resolveChunks();
               }
             };
 
-            cursorRequest.onerror = () => rejectCursor(new Error("Error during cursor operation."));
+            cursorRequest.onerror = () => rejectChunks(new Error("Error deleting chunks."));
           });
         });
 
@@ -375,19 +545,28 @@ const deleteFilesByFilename = async (filename: string) => {
 };
 
 const deleteAllDataFromIndexedDB = async () => {
-  const dbRequest = indexedDB.open("ChordsRecordings", 2);
+  const dbRequest = indexedDB.open("ChordsRecordings", 3);
 
   return new Promise<void>((resolve, reject) => {
     dbRequest.onsuccess = async (event) => {
       const db = (event.target as IDBOpenDBRequest).result;
 
       try {
-        await performIndexDBTransaction(db, "ChordsRecordings", "readwrite", async (store) => {
-          const clearRequest = store.clear();
+        // Clear metadata
+        await performIndexDBTransaction(db, "FileMetadata", "readwrite", (store) => {
+          return new Promise<void>((resolveMeta, rejectMeta) => {
+            const request = store.clear();
+            request.onsuccess = () => resolveMeta();
+            request.onerror = () => rejectMeta(request.error);
+          });
+        });
 
-          return new Promise<void>((resolveClear, rejectClear) => {
-            clearRequest.onsuccess = () => resolveClear();
-            clearRequest.onerror = () => rejectClear(new Error("Failed to clear IndexedDB store."));
+        // Clear data chunks
+        await performIndexDBTransaction(db, "DataChunks", "readwrite", (store) => {
+          return new Promise<void>((resolveChunks, rejectChunks) => {
+            const request = store.clear();
+            request.onsuccess = () => resolveChunks();
+            request.onerror = () => rejectChunks(request.error);
           });
         });
 
@@ -401,11 +580,18 @@ const deleteAllDataFromIndexedDB = async () => {
     dbRequest.onupgradeneeded = (event) => {
       const db = (event.target as IDBOpenDBRequest).result;
 
-      if (!db.objectStoreNames.contains("ChordsRecordings")) {
-        const store = db.createObjectStore("ChordsRecordings", { keyPath: "filename" });
-        store.createIndex("filename", "filename", { unique: false });
+      // Create stores if they don't exist
+      if (!db.objectStoreNames.contains("FileMetadata")) {
+        const metadataStore = db.createObjectStore("FileMetadata", { keyPath: "filename" });
+        metadataStore.createIndex("filename", "filename", { unique: true });
+      }
+      
+      if (!db.objectStoreNames.contains("DataChunks")) {
+        const chunksStore = db.createObjectStore("DataChunks", { 
+          keyPath: ["filename", "chunkIndex"] 
+        });
+        chunksStore.createIndex("byFilename", "filename", { unique: false });
       }
     };
   });
 };
-
