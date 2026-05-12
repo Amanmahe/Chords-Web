@@ -82,8 +82,10 @@ const Steps: React.FC = () => {
                     width={1000}
                     height={1500}
                     src={item.image}
-                    layout="responsive"
-                    className="rounded-xl xl:max-h-[70vh] lg:max-h-[70vh] 2xl:w-[70vh] w-full object-contain "
+                    style={{ width: '100%', height: 'auto' }}
+                    className="rounded-xl xl:max-h-[70vh] lg:max-h-[70vh] 2xl:w-[70vh] w-full object-contain"
+                    priority={index < 4}
+                    loading={index < 4 ? "eager" : undefined}
                   />
                 </div>
               </CarouselItem>
@@ -106,7 +108,7 @@ const Steps: React.FC = () => {
               src={selectedItem.image}
               width={800}
               height={800}
-              layout="responsive"
+              style={{ width: '100%', height: 'auto' }}
               className="rounded-lg"
             />
           </div>

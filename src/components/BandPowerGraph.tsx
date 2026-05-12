@@ -114,7 +114,7 @@ const Graph: React.FC<GraphProps> = ({
       if (!canvas || !container) return;
 
       if (currentBandPowerData.some(isNaN)) {
-        console.error("NaN values detected in band power data");
+        console.warn("NaN values detected in band power data");
         return;
       }
 
