@@ -308,7 +308,7 @@ const Canvas = forwardRef(
                         try {
                             wglp.gScaleY = Zoom; // Adjust zoom value
                         } catch (error) {
-                            console.error(
+                            console.warn(
                                 `Error setting gScaleY for WebglPlot instance at index ${index}:`,
                                 error
                             );
@@ -341,7 +341,7 @@ const Canvas = forwardRef(
                     const currentPos = sweepPositions.current[i] % line.numPoints;
 
                     if (Number.isNaN(currentPos)) {
-                        console.error(`Invalid currentPos at index ${i}. sweepPositions.current[i]:`, sweepPositions.current[i]);
+                        console.warn(`Invalid currentPos at index ${i}. sweepPositions.current[i]:`, sweepPositions.current[i]);
                         return;
                     }
 
@@ -349,7 +349,7 @@ const Canvas = forwardRef(
                     try {
                         line.setY(currentPos, channelData);
                     } catch (error) {
-                        console.error(`Error plotting data for line ${i} at position ${currentPos}:`, error);
+                        console.warn(`Error plotting data for line ${i} at position ${currentPos}:`, error);
                     }
 
                     // Clear the next point for visual effect
@@ -357,7 +357,7 @@ const Canvas = forwardRef(
                     try {
                         line.setY(clearPosition, NaN);
                     } catch (error) {
-                        console.error(`Error clearing data at position ${clearPosition} for line ${i}:`, error);
+                        console.warn(`Error clearing data at position ${clearPosition} for line ${i}:`, error);
                     }
 
                     // Increment the sweep position
@@ -393,7 +393,7 @@ const Canvas = forwardRef(
                     try {
                         wglp.gScaleY = Zoom;
                     } catch (error) {
-                        console.error(`Error setting gScaleY for WebglPlot instance at index ${i}:`, error);
+                        console.warn(`Error setting gScaleY for WebglPlot instance at index ${i}:`, error);
                     }
                 }
 
@@ -410,7 +410,7 @@ const Canvas = forwardRef(
                     if (line) {
                         line.shiftAdd(yArray);
                     } else {
-                        console.error(`Line at index ${i} is undefined or null.`);
+                        console.warn(`Line at index ${i} is undefined or null.`);
                     }
                 }
             });

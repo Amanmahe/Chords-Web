@@ -778,7 +778,7 @@ const NPG_Ble = () => {
                             toast.success(`File "${filename}" downloaded successfully.`);
                             setIsDownloadingFile(prev => ({ ...prev, [filename]: false }));
                         } else if (error) {
-                            console.error("Download error:", error);
+                            console.warn("Download error:", error);
                             toast.error(`Error downloading file: ${error}`);
                             setIsDownloadingFile(prev => ({ ...prev, [filename]: false }));
                         }
@@ -790,7 +790,7 @@ const NPG_Ble = () => {
                             toast.success("All files downloaded successfully as ZIP.");
                             setIsDownloadingAll(false);
                         } else if (error) {
-                            console.error("ZIP creation error:", error);
+                            console.warn("ZIP creation error:", error);
                             toast.error(`Error creating ZIP file: ${error}`);
                             setIsDownloadingAll(false);
                         }
@@ -882,7 +882,7 @@ const NPG_Ble = () => {
                 });
             }
         } catch (error) {
-            console.error('Error while saving ZIP file:', error);
+            console.warn('Error while saving ZIP file:', error);
             toast.error('Error creating ZIP file');
             setIsDownloadingAll(false);
         }
@@ -899,7 +899,7 @@ const NPG_Ble = () => {
                 selectChannel
             });
         } else {
-            console.error("Worker reference is null.");
+            console.warn("Worker reference is null.");
             toast.error("Worker is not available.");
         }
     };
@@ -1071,7 +1071,7 @@ const NPG_Ble = () => {
                     try {
                         wglp.gScaleY = zoomRef.current; // Adjust zoom value
                     } catch (error) {
-                        console.error(
+                        console.warn(
                             `Error setting gScaleY for WebglPlot instance at index ${index}:`,
                             error
                         );
@@ -1105,7 +1105,7 @@ const NPG_Ble = () => {
                 const currentPos = sweepPositions.current[i] % line.numPoints;
 
                 if (Number.isNaN(currentPos)) {
-                    console.error(`Invalid currentPos at index ${i}. sweepPositions.current[i]:`, sweepPositions.current[i]);
+                    console.warn(`Invalid currentPos at index ${i}. sweepPositions.current[i]:`, sweepPositions.current[i]);
                     return;
                 }
 
@@ -1113,7 +1113,7 @@ const NPG_Ble = () => {
                 try {
                     line.setY(currentPos, channelData);
                 } catch (error) {
-                    console.error(`Error plotting data for line ${i} at position ${currentPos}:`, error);
+                    console.warn(`Error plotting data for line ${i} at position ${currentPos}:`, error);
                 }
 
                 // Clear the next point for visual effect
@@ -1121,7 +1121,7 @@ const NPG_Ble = () => {
                 try {
                     line.setY(clearPosition, NaN);
                 } catch (error) {
-                    console.error(`Error clearing data at position ${clearPosition} for line ${i}:`, error);
+                    console.warn(`Error clearing data at position ${clearPosition} for line ${i}:`, error);
                 }
 
                 // Increment the sweep position

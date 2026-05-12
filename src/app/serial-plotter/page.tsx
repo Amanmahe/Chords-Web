@@ -57,13 +57,13 @@ const SerialPlotter = () => {
     function testWebGLShaderSupport(gl: WebGLRenderingContext) {
         const vertexShader = gl.createShader(gl.VERTEX_SHADER);
         if (!vertexShader) {
-            console.error("Failed to create vertex shader");
+            console.warn("Failed to create vertex shader");
             return false;
         }
         gl.shaderSource(vertexShader, "attribute vec4 position; void main() { gl_Position = position; }");
         gl.compileShader(vertexShader);
         if (!gl.getShaderParameter(vertexShader, gl.COMPILE_STATUS)) {
-            console.error("WebGL shader compilation failed:", gl.getShaderInfoLog(vertexShader));
+            console.warn("WebGL shader compilation failed:", gl.getShaderInfoLog(vertexShader));
             return false;
         }
         return true;
@@ -78,7 +78,7 @@ const SerialPlotter = () => {
 
         const gl = canvas.getContext("webgl");
         if (!gl || !testWebGLShaderSupport(gl)) {
-            console.error("WebGL shader support check failed.");
+            console.warn("WebGL shader support check failed.");
             return;
         }
 
@@ -160,7 +160,7 @@ const SerialPlotter = () => {
                 setShowPlotterData(true); // Show plotted data after 4 seconds
             }, 4000);
         } catch (err) {
-            console.error("Error connecting to serial:", err);
+            console.warn("Error connecting to serial:", err);
         }
     }, [baudRateref.current, setPort, setIsConnected, setRawData, wglpRef, linesRef]);
 
@@ -237,7 +237,7 @@ const SerialPlotter = () => {
                         }
                     }
                 } catch (error) {
-                    console.error("Error reading serial data chunk:", error);
+                    console.warn("Error reading serial data chunk:", error);
                     await new Promise((resolve) => setTimeout(resolve, 1000)); // Short delay before retry
                     continue;
                 }
@@ -246,7 +246,7 @@ const SerialPlotter = () => {
             clearTimeout(timeoutId);
             serialReader.releaseLock();
         } catch (err) {
-            console.error("Error reading serial data:", err);
+            console.warn("Error reading serial data:", err);
 
             // Attempt to reconnect if still connected
             setTimeout(() => {
@@ -320,7 +320,7 @@ const SerialPlotter = () => {
 
                 const currentPos = sweepPositions.current[i] % line.numPoints;
                 if (Number.isNaN(currentPos)) {
-                    console.error(`Invalid currentPos at i ${i}. sweepPositions.current[i]:`, sweepPositions.current[i]);
+                    console.warn(`Invalid currentPos at i ${i}. sweepPositions.current[i]:`, sweepPositions.current[i]);
                     return;
                 }
 
@@ -328,7 +328,7 @@ const SerialPlotter = () => {
                     try {
                         line.setY(currentPos, yValue);
                     } catch (error) {
-                        console.error(`Error plotting data for line ${i} at position ${currentPos}:`, error);
+                        console.warn(`Error plotting data for line ${i} at position ${currentPos}:`, error);
                     }
 
                 }
@@ -337,7 +337,7 @@ const SerialPlotter = () => {
                 try {
                     line.setY(clearPosition, NaN);
                 } catch (error) {
-                    console.error(`Error clearing data at position ${clearPosition} for line ${i}:`, error);
+                    console.warn(`Error clearing data at position ${clearPosition} for line ${i}:`, error);
                 }
 
                 // Increment the sweep position
@@ -392,7 +392,7 @@ const SerialPlotter = () => {
             writer.releaseLock(); // Release writer after writing
 
         } catch (err) {
-            console.error("Error sending command:", err);
+            console.warn("Error sending command:", err);
         }
     };
 

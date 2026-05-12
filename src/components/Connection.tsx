@@ -509,13 +509,13 @@ const Connection: React.FC<ConnectionProps> = ({
                         saveAs(zipBlob, 'ChordsWeb.zip');
                         toast.success("Data successfully downloaded as ZIP.");
                     } else if (error) {
-                        console.error(error);
+                        console.warn(error);
                         toast.error(`Error while creating ZIP: ${error}`);
                     }
                 };
             }
         } catch (error) {
-            console.error('Error while saving ZIP file:', error);
+            console.warn('Error while saving ZIP file:', error);
         }
     };
 
@@ -530,17 +530,17 @@ const Connection: React.FC<ConnectionProps> = ({
                     saveAs(blob, filename); // FileSaver.js
                     toast.success("File downloaded successfully.");
                 } else (error: any) => {
-                    console.error("Worker error:", error);
+                    console.warn("Worker error:", error);
                     toast.error(`Error during file download: ${error.message}`);
                 }
             };
 
             workerRef.current.onerror = (error) => {
-                console.error("Worker error:", error);
+                console.warn("Worker error:", error);
                 toast.error("An unexpected worker error occurred.");
             };
         } else {
-            console.error("Worker reference is null.");
+            console.warn("Worker reference is null.");
             toast.error("Worker is not available.");
         }
 
@@ -562,7 +562,7 @@ const Connection: React.FC<ConnectionProps> = ({
                         setDatasets((prev) => prev.filter((file) => file !== filename)); // Update datasets
                         resolve();
                     } else {
-                        console.error(`Failed to delete file '${filename}': ${error}`);
+                        console.warn(`Failed to delete file '${filename}': ${error}`);
                         reject(new Error(error));
                     }
                 }
@@ -585,7 +585,7 @@ const Connection: React.FC<ConnectionProps> = ({
                         setDatasets([]); // Clear all datasets from state
                         resolve();
                     } else {
-                        console.error('Failed to delete all files:', error);
+                        console.warn('Failed to delete all files:', error);
                         reject(new Error(error));
                     }
                 }
@@ -822,10 +822,10 @@ const Connection: React.FC<ConnectionProps> = ({
                     const startMessage = new TextEncoder().encode("START\n");
                     setTimeout(() => writer.write(startMessage), 2000);
                 } else {
-                    console.error("Writable stream not available");
+                    console.warn("Writable stream not available");
                 }
             } else {
-                console.error("Readable stream not available");
+                console.warn("Readable stream not available");
             }
             setIsSerial(true);
 
@@ -847,7 +847,7 @@ const Connection: React.FC<ConnectionProps> = ({
         } catch (error) {
             await disconnectDevice();
             setIsSerial(false);
-            console.error("Error connecting to device:", error);
+            console.warn("Error connecting to device:", error);
             toast.error("Failed to connect to device.");
         }
         setIsLoading(false);
@@ -978,10 +978,10 @@ const Connection: React.FC<ConnectionProps> = ({
                     const startMessage = new TextEncoder().encode("START\n");
                     setTimeout(() => writer.write(startMessage), 2000);
                 } else {
-                    console.error("Writable stream not available");
+                    console.warn("Writable stream not available");
                 }
             } else {
-                console.error("Readable stream not available");
+                console.warn("Readable stream not available");
             }
 
             setSelectedChannels(initialSelectedChannelsRef.current);
@@ -1001,7 +1001,7 @@ const Connection: React.FC<ConnectionProps> = ({
 
         } catch (error) {
             await disconnectDevice();
-            console.error("Error connecting to device:", error);
+            console.warn("Error connecting to device:", error);
             toast.error("Failed to connect to device.");
         }
         setIsfftLoading(false);
@@ -1044,7 +1044,7 @@ const Connection: React.FC<ConnectionProps> = ({
                     try {
                         await writerRef.current.write(stopMessage);
                     } catch (error) {
-                        console.error("Failed to send STOP command:", error);
+                        console.warn("Failed to send STOP command:", error);
                     }
                     if (writerRef.current) {
                         writerRef.current.releaseLock();
@@ -1057,7 +1057,7 @@ const Connection: React.FC<ConnectionProps> = ({
                     try {
                         await readerRef.current.cancel();
                     } catch (error) {
-                        console.error("Failed to cancel reader:", error);
+                        console.warn("Failed to cancel reader:", error);
                     }
                     if (readerRef.current) {
                         readerRef.current.releaseLock();
@@ -1081,7 +1081,7 @@ const Connection: React.FC<ConnectionProps> = ({
                 });
             }
         } catch (error) {
-            console.error("Error during disconnection:", error);
+            console.warn("Error during disconnection:", error);
         } finally {
             setIsDeviceConnected(false);
             isDeviceConnectedRef.current = false;
@@ -1626,7 +1626,7 @@ const Connection: React.FC<ConnectionProps> = ({
                 }
             }
         } catch (error) {
-            console.error("Error reading from device:", error); // Handle any errors that occur during the read process
+            console.warn("Error reading from device:", error); // Handle any errors that occur during the read process
         } finally {
             await disconnectDevice(); // Ensure the device is disDeviceConnected when finished
         }

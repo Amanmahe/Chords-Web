@@ -323,7 +323,7 @@ const MuscleStrength = () => {
             const currentPos = sweepPositions.current[i] % line1.numPoints;
 
             if (Number.isNaN(currentPos)) {
-                console.error(`Invalid currentPos at index ${i}. sweepPositions.current[i]:`, sweepPositions.current[i]);
+                console.warn(`Invalid currentPos at index ${i}. sweepPositions.current[i]:`, sweepPositions.current[i]);
                 return;
             }
 
@@ -332,7 +332,7 @@ const MuscleStrength = () => {
                 line1.setY(currentPos, newData[i + 1]); // Raw EMG data (index i+1 because newData[0] is counter)
                 line2.setY(currentPos, evn[i]); // Envelope data
             } catch (error) {
-                console.error(`Error plotting data for line ${i} at position ${currentPos}:`, error);
+                console.warn(`Error plotting data for line ${i} at position ${currentPos}:`, error);
             }
 
             // ✅ **Clear the next point for a smooth sweep effect**
@@ -341,7 +341,7 @@ const MuscleStrength = () => {
                 line1.setY(clearPosition, NaN);
                 line2.setY(clearPosition, NaN);
             } catch (error) {
-                console.error(`Error clearing data at position ${clearPosition} for line ${i}:`, error);
+                console.warn(`Error clearing data at position ${clearPosition} for line ${i}:`, error);
             }
 
             // ✅ **Increment the sweep position**
@@ -851,7 +851,7 @@ const MuscleStrength = () => {
                 console.log("Unexpected packet length: " + value.byteLength);
             }
         } catch (error) {
-            console.error("Error processing BLE data:", error);
+            console.warn("Error processing BLE data:", error);
 
         }
     }

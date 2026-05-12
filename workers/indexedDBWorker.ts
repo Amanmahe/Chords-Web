@@ -30,7 +30,7 @@ self.onmessage = async (event) => {
                 selectedChannels = channels;
                 handlePostMessage({ success: true, message: 'Selected channels updated' });
             } else {
-                console.error('Invalid selectedChannels received:', channels);
+                console.warn('Invalid selectedChannels received:', channels);
                 handlePostMessage({ success: false, message: 'Invalid selectedChannels format' });
             }
             break;
@@ -291,7 +291,7 @@ const writeToIndexedDB = async (
 
         return true;
     } catch (error) {
-        console.error("Error writing to IndexedDB:", error);
+        console.warn("Error writing to IndexedDB:", error);
         return false;
     }
 };
@@ -427,14 +427,14 @@ const saveAllDataAsZip = async (canvasCount: number, selectedChannels: number[])
                 const csvData = convertToCSV(content, canvasCount, selectedChannels);
                 zip.file(metadata.filename, csvData);
             } catch (error) {
-                console.error(`Error processing record ${metadata.filename}:`, error);
+                console.warn(`Error processing record ${metadata.filename}:`, error);
             }
         }
 
         const content = await zip.generateAsync({ type: "blob" });
         return content;
     } catch (error) {
-        console.error("Error creating ZIP file:", error);
+        console.warn("Error creating ZIP file:", error);
         throw error;
     }
 };
@@ -478,11 +478,11 @@ const saveDataByFilename = async (
             const blob = new Blob([csvData], { type: "text/csv;charset=utf-8" });
             return blob;
         } catch (conversionError) {
-            console.error("Error converting data to CSV:", conversionError);
+            console.warn("Error converting data to CSV:", conversionError);
             throw new Error("Failed to convert data to CSV format.");
         }
     } catch (error) {
-        console.error("Error during file download:", error);
+        console.warn("Error during file download:", error);
         throw new Error("Error occurred during file download.");
     }
 };
@@ -506,7 +506,7 @@ const getFileCountFromIndexedDB = async (db: IDBDatabase): Promise<string[]> => 
 
             cursorRequest.onerror = (event) => {
                 const error = (event.target as IDBRequest).error;
-                console.error("Error retrieving filenames from IndexedDB:", error);
+                console.warn("Error retrieving filenames from IndexedDB:", error);
                 reject(error);
             };
         });

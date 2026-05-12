@@ -333,7 +333,7 @@ const FFT = forwardRef(
                 linesRef.current = [line];
                 wglPlotsref.current = [wglp];
             } catch (error) {
-                console.error("Error creating WebglPlot:", error);
+                console.warn("Error creating WebglPlot:", error);
             }
         };
 
