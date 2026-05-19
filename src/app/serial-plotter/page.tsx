@@ -218,7 +218,7 @@ const SerialPlotter = () => {
                                 }
 
                                 // Convert to numeric data
-                                const values = line.trim().split(/\s+/).map(parseFloat).filter((v) => !isNaN(v));
+                                const values = line.trim().split(",").map(parseFloat).filter((v) => !isNaN(v));
                                 if (values.length > 0) {
                                     newData.push({ time: Date.now(), values });
                                     channelsref.current = values.length;
