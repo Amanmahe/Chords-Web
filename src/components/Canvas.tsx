@@ -75,15 +75,27 @@ const Canvas = forwardRef(
         }, []);
 
         useEffect(() => {
+            selectedChannelsRef.current = selectedChannels;
             dataPointCountRef.current = (currentSamplingRate * timeBase);
 
-        }, [timeBase]);
-
-        useEffect(() => {
-            selectedChannelsRef.current = selectedChannels;
-        }, [selectedChannels]);
-
-        const prevCanvasCountRef = useRef<number>(canvasCount);
+            // Any change to which channels are selected (not just how many),
+            // or to the window size (timeBase / sampling rate), invalidates
+            // every buffered snapshot: a slot may hold data for a channel
+            // that's no longer shown, line up with the wrong index (e.g.
+            // swapping CH1 for CH3 while keeping the count at 2), or be sized
+            // for a different window length than buffers filled afterward.
+            // Reset all 6 buffers so pause/rewind never mixes stale or
+            // mismatched-length data into the "previous windows" view.
+            for (let bufferIndex = 0; bufferIndex < 6; bufferIndex++) {
+                array3DRef.current[bufferIndex] = Array.from(
+                    { length: selectedChannels.length },
+                    () => []
+                );
+                snapShotRef.current[bufferIndex] = false;
+            }
+            activeBufferIndexRef.current = 0;
+            dataIndicesRef.current = [];
+        }, [selectedChannels, timeBase, currentSamplingRate, snapShotRef]);
 
         const processIncomingData = (incomingData: number[]) => {
             // Ensure we have valid references
@@ -91,18 +103,6 @@ const Canvas = forwardRef(
 
             const currentBuffer = array3DRef.current[activeBufferIndexRef.current];
             if (!currentBuffer) return;
-
-            // Handle canvas count changes and reset buffers
-            if (prevCanvasCountRef.current !== canvasCount) {
-                for (let bufferIndex = 0; bufferIndex < 6; bufferIndex++) {
-                    array3DRef.current[bufferIndex] = Array.from(
-                        { length: selectedChannelsRef.current.length },
-                        () => []
-                    );
-                    snapShotRef.current[bufferIndex] = false;
-                }
-                prevCanvasCountRef.current = canvasCount;
-            }
 
             // Process incoming data for each selected channel
             selectedChannelsRef.current.forEach((channelNumber, i) => {
@@ -404,11 +404,18 @@ const Canvas = forwardRef(
                     array3DRef.current[dataIndicesRef.current[currentSnapshot]][i]) {
 
                     const channelData = array3DRef.current[dataIndicesRef.current[currentSnapshot]][i];
-                    const yArray = new Float32Array(channelData);
 
                     const line = linesRef.current[i];
                     if (line) {
-                        line.shiftAdd(yArray);
+                        // Write the buffered snapshot directly instead of shiftAdd:
+                        // shiftAdd only overwrites `channelData.length` points and shifts
+                        // the rest, so a short/partial buffer would leave stale, previously
+                        // displayed data mixed in. Writing every point (NaN for any the
+                        // buffer hasn't filled yet) guarantees the paused view always shows
+                        // exactly the selected snapshot, not a blend with older frames.
+                        for (let p = 0; p < line.numPoints; p++) {
+                            line.setY(p, p < channelData.length ? channelData[p] : NaN);
+                        }
                     } else {
                         console.warn(`Line at index ${i} is undefined or null.`);
                     }

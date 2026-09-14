@@ -3,6 +3,7 @@ import React, { useState, useRef, useCallback, useEffect } from "react";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { EXGFilter, Notch, HighPassFilter } from './filters';
+import { MAX_REPFORGE_CHANNELS } from './RepForge';
 import { useTheme } from "next-themes";
 import { useRouter } from "next/navigation"; // Import useRouter
 import { getCustomColor, lightThemeColors } from './Colors';
@@ -19,8 +20,8 @@ import {
     Play,
     CircleOff,
     ReplaceAll,
-    Heart,
     Brain,
+    Heart,
     Eye,
     BicepsFlexed,
     ArrowRightToLine,
@@ -31,7 +32,11 @@ import {
     BatteryLow,
     BatteryMedium,
     BatteryFull,
-    BatteryWarning
+    BatteryWarning,
+    Activity,
+    AudioLines,
+    Wand2,
+    Filter as FilterIcon
 } from "lucide-react";
 
 import { BoardsList } from "./boards";
@@ -56,6 +61,7 @@ interface ConnectionProps {
     datastream: (data: number[]) => void;
     Connection: (isDeviceConnected: boolean) => void;
     FFT: (isDeviceConnected: boolean) => void;
+    RepForge: (isDeviceConnected: boolean) => void;
     selectedBits?: BitSelection; // Add `?` if it's optional
     setSelectedBits: React.Dispatch<React.SetStateAction<BitSelection>>;
     isDisplay: boolean;
@@ -83,6 +89,7 @@ const Connection: React.FC<ConnectionProps> = ({
     datastream,
     Connection,
     FFT,
+    RepForge,
     setSelectedBits,
     isDisplay,
     setIsDisplay,
@@ -108,6 +115,7 @@ const Connection: React.FC<ConnectionProps> = ({
     const [isSerial, setIsSerial] = useState(false); // Track if the device is connected
 
     const [FFTDeviceConnected, setFFTDeviceConnected] = useState<boolean>(false); // Track if the device is connected
+    const [RepForgeDeviceConnected, setRepForgeDeviceConnected] = useState<boolean>(false); // Track if RepForge view is active
     const isDeviceConnectedRef = useRef<boolean>(false); // Ref to track if the device is connected
     const isRecordingRef = useRef<boolean>(false); // Ref to track if the device is recording
     const isOldfirmwareRef = useRef<boolean>(false); // Ref to track if the device has old firmware
@@ -133,7 +141,6 @@ const Connection: React.FC<ConnectionProps> = ({
     const [deviceReady, setDeviceReady] = useState(false);
     const samplingrateref = useRef<number>(0);
     const [open, setOpen] = useState(false);
-    const [openfft, setOpenfft] = useState(false);
     const [isPauseState, setIsPauseState] = useState(false);
     // UI Themes & Modes
     const { theme } = useTheme(); // Current theme of the app
@@ -158,6 +165,14 @@ const Connection: React.FC<ConnectionProps> = ({
     const canvasElementCountRef = useRef<number>(1);
     const maxCanvasElementCountRef = useRef<number>(1);
     const [channelNames, setChannelNames] = useState<string[]>([]);
+
+    // Rep-Forge only ever displays up to MAX_REPFORGE_CHANNELS channels, even
+    // if the connected device supports more (some boards have up to 16).
+    const getMaxSelectableChannels = () => (
+        RepForgeDeviceConnected
+            ? Math.min(maxCanvasElementCountRef.current, MAX_REPFORGE_CHANNELS)
+            : maxCanvasElementCountRef.current
+    );
 
     const currentFileNameRef = useRef<string>("");
     const initialSelectedChannelsRef = useRef<any[]>([1]);
@@ -310,7 +325,7 @@ const Connection: React.FC<ConnectionProps> = ({
 
 
     useEffect(() => {
-        const enabledChannels = Array.from({ length: maxCanvasElementCountRef.current }, (_, i) => i + 1);
+        const enabledChannels = Array.from({ length: getMaxSelectableChannels() }, (_, i) => i + 1);
 
         const allSelected = selectedChannels.length === enabledChannels.length;
         const onlyOneLeft = selectedChannels.length === enabledChannels.length - 1;
@@ -319,12 +334,12 @@ const Connection: React.FC<ConnectionProps> = ({
 
         // Update the "Select All" button state
         setIsAllEnabledChannelSelected(allSelected);
-    }, [selectedChannels, maxCanvasElementCountRef.current, manuallySelected]);
+    }, [selectedChannels, maxCanvasElementCountRef.current, RepForgeDeviceConnected, manuallySelected]);
     useEffect(() => {
         setChannelNames(Array.from({ length: maxCanvasElementCountRef.current }, (_, i) => `CH${i + 1}`));
     }, [maxCanvasElementCountRef.current]);
     const handleSelectAllToggle = () => {
-        const enabledChannels = Array.from({ length: maxCanvasElementCountRef.current }, (_, i) => i + 1);
+        const enabledChannels = Array.from({ length: getMaxSelectableChannels() }, (_, i) => i + 1);
 
         if (!isAllEnabledChannelSelected) {
             // Programmatic selection of all channels
@@ -351,8 +366,12 @@ const Connection: React.FC<ConnectionProps> = ({
                 }
             }
 
-            // Set the channels back to saved values
-            setSelectedChannels(initialSelectedChannelsRefs); // Reset to saved channels
+            // Set the channels back to saved values (capped for Rep-Forge)
+            setSelectedChannels(
+                RepForgeDeviceConnected
+                    ? initialSelectedChannelsRefs.slice(0, MAX_REPFORGE_CHANNELS)
+                    : initialSelectedChannelsRefs
+            );
         }
 
         // Toggle the "Select All" button state
@@ -363,7 +382,13 @@ const Connection: React.FC<ConnectionProps> = ({
     const toggleChannel = (channelIndex: number) => {
         // Mark as manually selected and update selectedChannels
         setSelectedChannels((prevSelected) => {
-            const updatedChannels = prevSelected.includes(channelIndex)
+            const isRemoving = prevSelected.includes(channelIndex);
+            if (!isRemoving && RepForgeDeviceConnected && prevSelected.length >= MAX_REPFORGE_CHANNELS) {
+                toast.error(`Rep-Forge supports up to ${MAX_REPFORGE_CHANNELS} channels at a time.`);
+                return prevSelected;
+            }
+
+            const updatedChannels = isRemoving
                 ? prevSelected.filter((ch) => ch !== channelIndex)
                 : [...prevSelected, channelIndex];
 
@@ -830,6 +855,10 @@ const Connection: React.FC<ConnectionProps> = ({
             setIsSerial(true);
 
             setSelectedChannels(initialSelectedChannelsRef.current);
+            FFT(false);
+            RepForge(false);
+            setFFTDeviceConnected(false);
+            setRepForgeDeviceConnected(false);
             Connection(true);
             setIsDeviceConnected(true);
             onPauseChange(true);
@@ -852,162 +881,6 @@ const Connection: React.FC<ConnectionProps> = ({
         }
         setIsLoading(false);
     };
-
-    const connectToDevicefft = async () => {
-        try {
-            if (portRef.current && portRef.current.readable) {
-                await disconnectDevice();
-            }
-
-            const savedPorts = JSON.parse(localStorage.getItem('savedDevices') || '[]');
-            let port = null;
-            const ports = await navigator.serial.getPorts();
-            setIsSerial(true);
-            if (savedPorts.length > 0) {
-                port = ports.find((p) => {
-                    const info = p.getInfo();
-                    return savedPorts.some(
-                        (saved: SavedDevice) => saved.usbProductId === info.usbProductId
-                    );
-                }) || null;
-            }
-            handleFrequencySelectionEXG(0, 3);
-            let baudRate;
-            let serialTimeout;
-            setSelectedChannel(1);
-            if (!port) {
-                port = await navigator.serial.requestPort();
-                const newPortInfo = await port.getInfo();
-                const usbProductId = newPortInfo.usbProductId ?? 0;
-
-                const board = BoardsList.find((b) => b.field_pid === usbProductId);
-                baudRate = board ? board.baud_Rate : 0;
-                serialTimeout = board ? board.serial_timeout : 0;
-                await port.open({ baudRate });
-                setIsfftLoading(true);
-            } else {
-                setIsfftLoading(true);
-                const info = port.getInfo();
-                const savedDevice = savedPorts.find(
-                    (saved: SavedDevice) => saved.usbProductId === info.usbProductId
-                );
-
-                const deviceIndex = savedPorts.findIndex(
-                    (saved: SavedDevice) => saved.usbProductId === info.usbProductId
-                );
-
-                if (deviceIndex !== -1) {
-                    const savedChannels = savedPorts[deviceIndex].selectedChannels;
-                }
-
-                baudRate = savedDevice?.baudRate || 230400;
-                serialTimeout = savedDevice?.serialTimeout || 2000;
-
-                await port.open({ baudRate });
-            }
-
-            if (port.readable) {
-                const reader = port.readable.getReader();
-                readerRef.current = reader;
-                const writer = port.writable?.getWriter();
-                if (writer) {
-                    writerRef.current = writer;
-                    const whoAreYouMessage = new TextEncoder().encode("WHORU\n");
-                    setTimeout(() => writer.write(whoAreYouMessage), serialTimeout);
-                    let buffer = "";
-                    while (true) {
-                        const { value, done } = await reader.read();
-                        if (done) break;
-                        if (value) {
-                            buffer += new TextDecoder().decode(value);
-                            if (buffer.includes("\n")) break;
-                        }
-                    }
-                    const response = buffer.trim().split("\n").pop();
-                    const extractedName = response?.match(/[A-Za-z0-9\-_\s]+$/)?.[0]?.trim() || "Unknown Device";
-                    devicenameref.current = extractedName;
-                    const currentPortInfo = port.getInfo();
-                    const usbProductId = currentPortInfo.usbProductId ?? 0;
-
-                    const existingDeviceIndex = savedPorts.findIndex(
-                        (saved: SavedDevice) => saved.deviceName === extractedName
-                    );
-
-                    if (existingDeviceIndex !== -1) {
-                        const lastSelectedChannels = savedPorts?.selectedChannels || [1];
-                        setSelectedChannels(lastSelectedChannels);
-                    } else {
-                        savedPorts.push({
-                            deviceName: extractedName,
-                            usbProductId: currentPortInfo.usbProductId ?? 0,
-                            baudRate,
-                            serialTimeout,
-                            selectedChannels,
-                        });
-                        const lastSelectedChannels = savedPorts?.selectedChannels || [1];
-                        setSelectedChannels(lastSelectedChannels);
-                    }
-
-                    localStorage.setItem('savedDevices', JSON.stringify(savedPorts));
-
-                    const { formattedInfo, adcResolution, channelCount, baudRate: extractedBaudRate, serialTimeout: extractedSerialTimeout } = formatPortInfo(currentPortInfo, extractedName, usbProductId);
-
-                    // Update maxCanvasElementCountRef when connecting a new device
-                    if (channelCount) {
-                        maxCanvasElementCountRef.current = channelCount; // Ensure the new device’s channel count is applied
-                    }
-
-                    const allSelected = initialSelectedChannelsRef.current.length == channelCount;
-                    setIsAllEnabledChannelSelected(!allSelected);
-
-                    baudRate = extractedBaudRate ?? baudRate;
-                    serialTimeout = extractedSerialTimeout ?? serialTimeout;
-
-                    toast.success("Connection Successful", {
-                        description: (
-                            <div className="mt-2 flex flex-col space-y-1">
-                                <p>Device: {formattedInfo}</p>
-                                <p>Product ID: {usbProductId}</p>
-                                <p>Baud Rate: {baudRate}</p>
-                                {adcResolution && <p>Resolution: {adcResolution} bits</p>}
-                                {channelCount && <p>Channel: {channelCount}</p>}
-                            </div>
-                        ),
-                    });
-
-                    const startMessage = new TextEncoder().encode("START\n");
-                    setTimeout(() => writer.write(startMessage), 2000);
-                } else {
-                    console.warn("Writable stream not available");
-                }
-            } else {
-                console.warn("Readable stream not available");
-            }
-
-            setSelectedChannels(initialSelectedChannelsRef.current);
-            FFT(true);
-            setIsDeviceConnected(true);
-            setFFTDeviceConnected(true);
-            setIsDisplay(true);
-            setCanvasCount(1);
-            isDeviceConnectedRef.current = true;
-            portRef.current = port;
-
-            const data = await getFileCountFromIndexedDB();
-            setDatasets(data);
-            readData();
-
-            await navigator.wakeLock.request("screen");
-
-        } catch (error) {
-            await disconnectDevice();
-            console.warn("Error connecting to device:", error);
-            toast.error("Failed to connect to device.");
-        }
-        setIsfftLoading(false);
-
-    };
-
 
     const getFileCountFromIndexedDB = async (): Promise<any[]> => {
         if (!workerRef.current) {
@@ -1072,7 +945,9 @@ const Connection: React.FC<ConnectionProps> = ({
                 portRef.current = null;
                 setIsDeviceConnected(false); // Update connection state
                 setFFTDeviceConnected(false);
+                setRepForgeDeviceConnected(false);
                 FFT(false);
+                RepForge(false);
                 toast("Disconnected from device", {
                     action: {
                         label: "Reconnect",
@@ -1320,9 +1195,12 @@ const Connection: React.FC<ConnectionProps> = ({
             setSelectedChannels(Array.from({ length: channelCount }, (_, i) => i + 1));
             maxCanvasElementCountRef.current = channelCount;
 
-            FFT(true);
+            FFT(false);
+            RepForge(false);
+            setFFTDeviceConnected(false);
+            setRepForgeDeviceConnected(false);
+            Connection(true);
             setIsDeviceConnected(true);
-            setFFTDeviceConnected(true);
             setIsDisplay(true);
             setCanvasCount(1);
             isDeviceConnectedRef.current = true;
@@ -1370,7 +1248,10 @@ const Connection: React.FC<ConnectionProps> = ({
             console.log("helo");
             setIsDeviceConnected(false); // Update connection state
             setFFTDeviceConnected(false);
+            setRepForgeDeviceConnected(false);
             FFT(false);
+            RepForge(false);
+            Connection(false);
 
             // Reset battery state
             setBatteryLevel(null);
@@ -1582,8 +1463,15 @@ const Connection: React.FC<ConnectionProps> = ({
                             }
                             datastream(channelData); // Pass the channel data to the LineData function for further processing
                             if (isRecordingRef.current) {
+                                // Keep every device channel in the recorded row (counter +
+                                // NUM_CHANNELS), not just the first `canvasElementCountRef.current`
+                                // (= number of *selected* channels) — slicing by selection count
+                                // silently dropped any selected channel whose number is higher
+                                // than how many are selected (e.g. channel 5 with only 3
+                                // selected). Column filtering by the actual selected channel
+                                // numbers happens later, at export time.
                                 const channeldatavalues = channelData
-                                    .slice(0, canvasElementCountRef.current + 1)
+                                    .slice(0, NUM_CHANNELS + 1)
                                     .map((value) => (value !== undefined ? value : null))
                                     .filter((value): value is number => value !== null); // Filter out null values
                                 // Check if recording is enabled
@@ -1683,9 +1571,41 @@ const Connection: React.FC<ConnectionProps> = ({
         return `${hours}:${minutes}:${seconds}`;
     };
 
+    // Switch which application view is shown for the already-connected device,
+    // without tearing down and re-establishing the Serial/BLE connection.
+    const switchToView = (view: 'chords' | 'fft' | 'repforge') => {
+        if (!isDeviceConnected) return;
+
+        Connection(view === 'chords');
+        FFT(view === 'fft');
+        RepForge(view === 'repforge');
+        setFFTDeviceConnected(view === 'fft');
+        setRepForgeDeviceConnected(view === 'repforge');
+
+        // Filters are view-specific — reset them on every app switch so a
+        // filter chosen in one view doesn't silently keep applying in another.
+        appliedFiltersRef.current = {};
+        appliedEXGFiltersRef.current = {};
+        forceUpdate();
+        forceEXGUpdate();
+
+        if (view === 'fft') {
+            setSelectedChannel(1);
+            handleFrequencySelectionEXG(0, 3);
+        }
+
+        if (view === 'repforge') {
+            // Rep-Forge only supports up to MAX_REPFORGE_CHANNELS at a time,
+            // even if more are selected coming from the other views.
+            setSelectedChannels((prev) =>
+                prev.length > MAX_REPFORGE_CHANNELS ? prev.slice(0, MAX_REPFORGE_CHANNELS) : prev
+            );
+        }
+    };
+
 
     return (
-        <div className="flex-none items-center justify-center pb-4 bg-g">
+        <div className="flex-none items-center justify-center pb-4 bg-g min-w-0">
             {/* Left-aligned section */}
             <div className="absolute left-4 flex items-center mx-0 px-0 space-x-1">
                 {isRecordingRef.current && (
@@ -1762,7 +1682,7 @@ const Connection: React.FC<ConnectionProps> = ({
             </div>
 
             {/* Center-aligned buttons */}
-            <div className="flex gap-3 items-center justify-center">
+            <div className="flex flex-wrap gap-3 items-center justify-center min-w-0 px-4">
                 {/* Connection button with tooltip */}
                 <TooltipProvider>
                     <Tooltip>
@@ -1771,101 +1691,48 @@ const Connection: React.FC<ConnectionProps> = ({
                                 <PopoverTrigger asChild>
                                     <Button
                                         className="flex items-center gap-1 py-2 px-4 rounded-xl font-semibold"
-                                        onClick={() => (isDeviceConnected ? isSerial ? disconnectDevice() : disconnect() : connectToDevice())}
-                                        disabled={isLoading}
+                                        onClick={() => (isDeviceConnected ? (isSerial ? disconnectDevice() : disconnect()) : undefined)}
+                                        disabled={isLoading || isfftLoading}
                                     >
-                                        {isLoading ? (
+                                        {isLoading || isfftLoading ? (
                                             <>
-                                                <Loader size={17} className="animate-spin" />
-                                                Connecting...
+                                                <Loader size={17} className="animate-spin min-[1230px]:hidden" />
+                                                <span className="hidden min-[1230px]:inline">Connecting...</span>
                                             </>
                                         ) : isDeviceConnected ? (
                                             <>
-                                                Disconnect
-                                                <CircleX size={17} />
+                                                <span className="hidden min-[1230px]:inline">Disconnect</span>
+                                                <CircleX size={17} className="min-[1230px]:hidden" />
                                             </>
                                         ) : (
                                             <>
-                                                Chords Visualizer
-                                                <Cable size={17} />
+                                                <span className="hidden min-[1230px]:inline">Connect</span>
+                                                <Cable size={17} className="min-[1230px]:hidden" />
                                             </>
                                         )}
                                     </Button>
                                 </PopoverTrigger>
                                 {!isDeviceConnected && (
-                                    <Button
-                                        className="py-2 px-4 rounded-xl font-semibold"
-                                        onClick={() => {
-                                            localStorage.setItem("autoConnectSerial", "true"); // Auto-connect flag
-                                            router.push("/serial-plotter");
-                                        }}
-                                    >
-                                        Serial Wizard
-                                    </Button>
-                                )}
-                                {!isDeviceConnected && (
-                                    <Popover open={openfft} onOpenChange={setOpenfft}>
-                                        <PopoverTrigger asChild>
-                                            <Button
-                                                className="flex items-center gap-1 py-2 px-4 rounded-xl font-semibold"
-                                                disabled={isfftLoading || isPauseState}
-                                            >
-                                                {isfftLoading ? (
-                                                    <>
-                                                        <Loader size={17} className="animate-spin" />
-                                                        Connecting...
-                                                    </>
-                                                ) : isDeviceConnected ? (
-                                                    <>
-                                                        Disconnect
-                                                        <CircleX size={17} />
-                                                    </>
-                                                ) : (
-                                                    <>
-                                                        FFT Visualizer
-                                                        <Cable size={17} />
-                                                    </>
-                                                )}
-                                            </Button>
-                                        </PopoverTrigger>
-
-                                        {!isDeviceConnected && (
-                                            <PopoverContent className="w-40 p-3 space-y-2 mx-4 mb-2">
-                                                <Button
-                                                    className="w-full"
-                                                    onClick={() => connectToDevicefft()}
-                                                >
-                                                    Serial
-                                                </Button>
-                                                <Button
-                                                    className="w-full"
-                                                    onClick={() => { connectBLE() }}
-                                                >
-                                                    Bluetooth
-                                                </Button>
-                                            </PopoverContent>
-                                        )}
-                                    </Popover>
-                                )}
-                                {!isDeviceConnected && (
-                                    <Button
-                                        className="py-2 px-4 rounded-xl font-semibold"
-                                        onClick={() => {
-                                            router.push("/npg-lite");
-                                        }}
-                                    >
-                                        NPG-Lite
-                                    </Button>
-                                )}
-                                {!isDeviceConnected && (
-                                    <Button
-                                        className="py-2 px-4 rounded-xl font-semibold"
-                                        onClick={() => {
-                                            router.push("/muscle-strength");
-                                        }}
-                                    >
-                                        Rep-Forge
-                                    </Button>
+                                    <PopoverContent className="w-40 p-3 space-y-2 mx-4 mb-2">
+                                        <Button
+                                            className="w-full"
+                                            onClick={() => {
+                                                setOpen(false);
+                                                connectToDevice();
+                                            }}
+                                        >
+                                            Serial
+                                        </Button>
+                                        <Button
+                                            className="w-full"
+                                            onClick={() => {
+                                                setOpen(false);
+                                                connectBLE();
+                                            }}
+                                        >
+                                            Bluetooth
+                                        </Button>
+                                    </PopoverContent>
                                 )}
                             </Popover>
                         </TooltipTrigger>
@@ -1874,8 +1741,51 @@ const Connection: React.FC<ConnectionProps> = ({
                         </TooltipContent>
                     </Tooltip>
                 </TooltipProvider>
+
+                {!isDeviceConnected && (
+                    <Button
+                        className="flex items-center gap-1 py-2 px-4 rounded-xl font-semibold"
+                        onClick={() => {
+                            localStorage.setItem("autoConnectSerial", "true"); // Auto-connect flag
+                            router.push("/serial-plotter");
+                        }}
+                    >
+                        <span className="hidden min-[1230px]:inline">Serial Wizard</span>
+                        <Wand2 size={17} className="min-[1230px]:hidden" />
+                    </Button>
+                )}
+
+                {/* App switcher: open any application on the already-connected device */}
+                {isDeviceConnected && (
+                    <div className="flex items-center gap-0.5 mx-0 px-0">
+                        <Button
+                            variant={!FFTDeviceConnected && !RepForgeDeviceConnected ? "default" : "outline"}
+                            className="flex items-center gap-1 rounded-xl rounded-r-none"
+                            onClick={() => switchToView('chords')}
+                        >
+                            <Activity size={17} className="min-[1230px]:hidden" />
+                            <span className="hidden min-[1230px]:inline">Chords Visualizer</span>
+                        </Button>
+                        <Button
+                            variant={FFTDeviceConnected ? "default" : "outline"}
+                            className="flex items-center gap-1 rounded-none"
+                            onClick={() => switchToView('fft')}
+                        >
+                            <AudioLines size={17} className="min-[1230px]:hidden" />
+                            <span className="hidden min-[1230px]:inline">FFT Visualizer</span>
+                        </Button>
+                        <Button
+                            variant={RepForgeDeviceConnected ? "default" : "outline"}
+                            className="flex items-center gap-1 rounded-xl rounded-l-none"
+                            onClick={() => switchToView('repforge')}
+                        >
+                            <BicepsFlexed size={17} className="min-[1230px]:hidden" />
+                            <span className="hidden min-[1230px]:inline">Rep-Forge</span>
+                        </Button>
+                    </div>
+                )}
                 {/* Display (Play/Pause) button with tooltip */}
-                {isDeviceConnected && !FFTDeviceConnected && (
+                {isDeviceConnected && (
                     <div className="flex items-center gap-0.5 mx-0 px-0">
                         <Button
                             className="rounded-xl rounded-r-none"
@@ -2017,10 +1927,11 @@ const Connection: React.FC<ConnectionProps> = ({
                     >
                         <PopoverTrigger asChild>
                             <Button
-                                className="flex items-center justify-center px-3 py-2 select-none min-w-12 whitespace-nowrap rounded-xl"
+                                className="flex items-center gap-1 justify-center px-3 py-2 select-none min-w-12 whitespace-nowrap rounded-xl"
                                 disabled={isPauseState}
                             >
-                                Filter
+                                <FilterIcon size={17} className="min-[1230px]:hidden" />
+                                <span className="hidden min-[1230px]:inline">Filter</span>
                             </Button>
                         </PopoverTrigger>
                         <PopoverContent className="w-50 p-4 mx-4 mb-2">
@@ -2047,47 +1958,55 @@ const Connection: React.FC<ConnectionProps> = ({
                                                 variant="outline"
                                                 size="sm"
                                                 onClick={() => applyEXGFilterToAllChannels(Array.from({ length: maxCanvasElementCountRef.current }, (_, i) => i), 4)}
-                                                className={`flex items-center justify-center px-3 py-2 rounded-none select-none border-0
+                                                className={`flex items-center justify-center px-3 py-2 select-none border-0 ${RepForgeDeviceConnected ? "rounded-xl rounded-l-none" : "rounded-none"}
                         ${Object.keys(appliedEXGFiltersRef.current).length === maxCanvasElementCountRef.current && Object.values(appliedEXGFiltersRef.current).every((value) => value === 4)
                                                         ? "bg-green-700 hover:bg-white-500 text-white hover:text-white" // Disabled background
                                                         : "bg-white-500" // Active background
                                                     }`}
                                             >
                                                 <BicepsFlexed size={17} />
-                                            </Button> <Button
-                                                variant="outline"
-                                                size="sm"
-                                                onClick={() => applyEXGFilterToAllChannels(Array.from({ length: maxCanvasElementCountRef.current }, (_, i) => i), 3)}
-                                                className={`flex items-center justify-center px-3 py-2 rounded-none select-none border-0
-                        ${Object.keys(appliedEXGFiltersRef.current).length === maxCanvasElementCountRef.current && Object.values(appliedEXGFiltersRef.current).every((value) => value === 3)
-                                                        ? "bg-green-700 hover:bg-white-500 text-white hover:text-white" // Disabled background
-                                                        : "bg-white-500" // Active background
-                                                    }`}
-                                            >
-                                                <Brain size={17} />
-                                            </Button> <Button
-                                                variant="outline"
-                                                size="sm"
-                                                onClick={() => applyEXGFilterToAllChannels(Array.from({ length: maxCanvasElementCountRef.current }, (_, i) => i), 1)}
-                                                className={`flex items-center justify-center px-3 py-2 rounded-none select-none border-0
-                        ${Object.keys(appliedEXGFiltersRef.current).length === maxCanvasElementCountRef.current && Object.values(appliedEXGFiltersRef.current).every((value) => value === 1)
-                                                        ? "bg-green-700 hover:bg-white-500 text-white hover:text-white" // Disabled background
-                                                        : "bg-white-500" // Active background
-                                                    }`}
-                                            >
-                                                <Heart size={17} />
-                                            </Button> <Button
-                                                variant="outline"
-                                                size="sm"
-                                                onClick={() => applyEXGFilterToAllChannels(Array.from({ length: maxCanvasElementCountRef.current }, (_, i) => i), 2)}
-                                                className={`rounded-xl rounded-l-none border-0
-                        ${Object.keys(appliedEXGFiltersRef.current).length === maxCanvasElementCountRef.current && Object.values(appliedEXGFiltersRef.current).every((value) => value === 2)
-                                                        ? "bg-green-700 hover:bg-white-500 text-white hover:text-white" // Disabled background
-                                                        : "bg-white-500" // Active background
-                                                    }`}
-                                            >
-                                                <Eye size={17} />
                                             </Button>
+                                            {/* Rep-Forge only offers the muscle (EMG) filter */}
+                                            {!RepForgeDeviceConnected && (
+                                                <>
+                                                    <Button
+                                                        variant="outline"
+                                                        size="sm"
+                                                        onClick={() => applyEXGFilterToAllChannels(Array.from({ length: maxCanvasElementCountRef.current }, (_, i) => i), 3)}
+                                                        className={`flex items-center justify-center px-3 py-2 rounded-none select-none border-0
+                        ${Object.keys(appliedEXGFiltersRef.current).length === maxCanvasElementCountRef.current && Object.values(appliedEXGFiltersRef.current).every((value) => value === 3)
+                                                                ? "bg-green-700 hover:bg-white-500 text-white hover:text-white" // Disabled background
+                                                                : "bg-white-500" // Active background
+                                                            }`}
+                                                    >
+                                                        <Brain size={17} />
+                                                    </Button>
+                                                    <Button
+                                                        variant="outline"
+                                                        size="sm"
+                                                        onClick={() => applyEXGFilterToAllChannels(Array.from({ length: maxCanvasElementCountRef.current }, (_, i) => i), 1)}
+                                                        className={`flex items-center justify-center px-3 py-2 rounded-none select-none border-0
+                        ${Object.keys(appliedEXGFiltersRef.current).length === maxCanvasElementCountRef.current && Object.values(appliedEXGFiltersRef.current).every((value) => value === 1)
+                                                                ? "bg-green-700 hover:bg-white-500 text-white hover:text-white" // Disabled background
+                                                                : "bg-white-500" // Active background
+                                                            }`}
+                                                    >
+                                                        <Heart size={17} />
+                                                    </Button>
+                                                    <Button
+                                                        variant="outline"
+                                                        size="sm"
+                                                        onClick={() => applyEXGFilterToAllChannels(Array.from({ length: maxCanvasElementCountRef.current }, (_, i) => i), 2)}
+                                                        className={`rounded-xl rounded-l-none border-0
+                        ${Object.keys(appliedEXGFiltersRef.current).length === maxCanvasElementCountRef.current && Object.values(appliedEXGFiltersRef.current).every((value) => value === 2)
+                                                                ? "bg-green-700 hover:bg-white-500 text-white hover:text-white" // Disabled background
+                                                                : "bg-white-500" // Active background
+                                                            }`}
+                                                    >
+                                                        <Eye size={17} />
+                                                    </Button>
+                                                </>
+                                            )}
                                         </div>
                                         <div className="flex border border-input rounded-xl items-center mx-0 px-0">
                                             <Button
@@ -2153,7 +2072,7 @@ const Connection: React.FC<ConnectionProps> = ({
                                                         variant="outline"
                                                         size="sm"
                                                         onClick={() => handleFrequencySelectionEXG(index, 4)}
-                                                        className={`flex items-center justify-center px-3 py-2 rounded-none select-none border-0
+                                                        className={`flex items-center justify-center px-3 py-2 select-none border-0 ${RepForgeDeviceConnected ? "rounded-xl rounded-l-none" : "rounded-none"}
                                                         ${appliedEXGFiltersRef.current[index] === 4
                                                                 ? "bg-green-700 hover:bg-white-500 text-white hover:text-white" // Disabled background
                                                                 : "bg-white-500" // Active background
@@ -2161,42 +2080,47 @@ const Connection: React.FC<ConnectionProps> = ({
                                                     >
                                                         <BicepsFlexed size={17} />
                                                     </Button>
-                                                    <Button
-                                                        variant="outline"
-                                                        size="sm"
-                                                        onClick={() => handleFrequencySelectionEXG(index, 3)}
-                                                        className={`flex items-center justify-center px-3 py-2 rounded-none select-none border-0
+                                                    {/* Rep-Forge only offers the muscle (EMG) filter */}
+                                                    {!RepForgeDeviceConnected && (
+                                                        <>
+                                                            <Button
+                                                                variant="outline"
+                                                                size="sm"
+                                                                onClick={() => handleFrequencySelectionEXG(index, 3)}
+                                                                className={`flex items-center justify-center px-3 py-2 rounded-none select-none border-0
                                                       ${appliedEXGFiltersRef.current[index] === 3
-                                                                ? "bg-green-700 hover:bg-white-500 text-white hover:text-white" // Disabled background
-                                                                : "bg-white-500" // Active background
-                                                            }`}
-                                                    >
-                                                        <Brain size={17} />
-                                                    </Button>
-                                                    <Button
-                                                        variant="outline"
-                                                        size="sm"
-                                                        onClick={() => handleFrequencySelectionEXG(index, 1)}
-                                                        className={`flex items-center justify-center px-3 py-2 rounded-none select-none border-0
+                                                                        ? "bg-green-700 hover:bg-white-500 text-white hover:text-white" // Disabled background
+                                                                        : "bg-white-500" // Active background
+                                                                    }`}
+                                                            >
+                                                                <Brain size={17} />
+                                                            </Button>
+                                                            <Button
+                                                                variant="outline"
+                                                                size="sm"
+                                                                onClick={() => handleFrequencySelectionEXG(index, 1)}
+                                                                className={`flex items-center justify-center px-3 py-2 rounded-none select-none border-0
                                                         ${appliedEXGFiltersRef.current[index] === 1
-                                                                ? "bg-green-700 hover:bg-white-500 text-white hover:text-white" // Disabled background
-                                                                : "bg-white-500" // Active background
-                                                            }`}
-                                                    >
-                                                        <Heart size={17} />
-                                                    </Button>
-                                                    <Button
-                                                        variant="outline"
-                                                        size="sm"
-                                                        onClick={() => handleFrequencySelectionEXG(index, 2)}
-                                                        className={`rounded-xl rounded-l-none border-0
+                                                                        ? "bg-green-700 hover:bg-white-500 text-white hover:text-white" // Disabled background
+                                                                        : "bg-white-500" // Active background
+                                                                    }`}
+                                                            >
+                                                                <Heart size={17} />
+                                                            </Button>
+                                                            <Button
+                                                                variant="outline"
+                                                                size="sm"
+                                                                onClick={() => handleFrequencySelectionEXG(index, 2)}
+                                                                className={`rounded-xl rounded-l-none border-0
                                                         ${appliedEXGFiltersRef.current[index] === 2
-                                                                ? "bg-green-700 hover:bg-white-500 text-white hover:text-white" // Disabled background
-                                                                : "bg-white-500" // Active background
-                                                            }`}
-                                                    >
-                                                        <Eye size={17} />
-                                                    </Button>
+                                                                        ? "bg-green-700 hover:bg-white-500 text-white hover:text-white" // Disabled background
+                                                                        : "bg-white-500" // Active background
+                                                                    }`}
+                                                            >
+                                                                <Eye size={17} />
+                                                            </Button>
+                                                        </>
+                                                    )}
                                                 </div>
                                                 <div className="flex border border-input rounded-xl items-center mx-0 px-0">
                                                     <Button
@@ -2250,10 +2174,11 @@ const Connection: React.FC<ConnectionProps> = ({
                     <Popover open={isFilterPopoverOpen} onOpenChange={setIsFilterPopoverOpen}>
                         <PopoverTrigger asChild>
                             <Button
-                                className="flex items-center justify-center px-3 py-2 select-none min-w-12 whitespace-nowrap rounded-xl"
+                                className="flex items-center gap-1 justify-center px-3 py-2 select-none min-w-12 whitespace-nowrap rounded-xl"
                                 disabled={!isDisplay}
                             >
-                                Filter
+                                <FilterIcon size={17} className="min-[1230px]:hidden" />
+                                <span className="hidden min-[1230px]:inline">Filter</span>
                             </Button>
                         </PopoverTrigger>
                         <PopoverContent className="w-50 p-4 mx-4 mb-2">
@@ -2416,14 +2341,23 @@ const Connection: React.FC<ConnectionProps> = ({
 
                 {FFTDeviceConnected && (
                     <Popover>
-                        <PopoverTrigger asChild>
-                            <Button
-                                className="flex items-center gap-1 py-2 px-4 rounded-xl font-semibold"
-                                disabled={isfftLoading || isPauseState}
-                            >
-                                Channels
-                            </Button>
-                        </PopoverTrigger>
+                        <TooltipProvider>
+                            <Tooltip>
+                                <TooltipTrigger asChild>
+                                    <PopoverTrigger asChild>
+                                        <Button
+                                            className="flex items-center justify-center select-none whitespace-nowrap rounded-lg"
+                                            disabled={isfftLoading || isPauseState}
+                                        >
+                                            <Settings size={16} />
+                                        </Button>
+                                    </PopoverTrigger>
+                                </TooltipTrigger>
+                                <TooltipContent>
+                                    <p>Channel Settings</p>
+                                </TooltipContent>
+                            </Tooltip>
+                        </TooltipProvider>
 
                         <PopoverContent className="w-full p-3 space-y-2 mx-4 mb-2">
                             <div id="button-container" className="relative space-y-2 rounded-lg">
@@ -2489,7 +2423,7 @@ const Connection: React.FC<ConnectionProps> = ({
                                                     <h3 className="text-xs font-semibold text-gray-500">
                                                         <span className="font-bold text-gray-600">Channels Count:</span> {selectedChannels.length}
                                                     </h3>
-                                                    {!(selectedChannels.length === maxCanvasElementCountRef.current && manuallySelected) && (
+                                                    {!(selectedChannels.length === getMaxSelectableChannels() && manuallySelected) && (
                                                         <button
                                                             onClick={handleSelectAllToggle}
                                                             className={`px-4 py-1 text-xs font-light rounded-lg transition m-2 ${isSelectAllDisabled
@@ -2508,8 +2442,10 @@ const Connection: React.FC<ConnectionProps> = ({
                                                         <div key={container} className="grid grid-cols-8 gap-2">
                                                             {Array.from({ length: 8 }).map((_, col) => {
                                                                 const index = container * 8 + col;
-                                                                const isChannelDisabled = index >= maxCanvasElementCountRef.current;
                                                                 const isSelected = selectedChannels.includes(index + 1);
+                                                                const isBeyondDeviceChannels = index >= maxCanvasElementCountRef.current;
+                                                                const isAtRepForgeCap = RepForgeDeviceConnected && !isSelected && selectedChannels.length >= MAX_REPFORGE_CHANNELS;
+                                                                const isChannelDisabled = isBeyondDeviceChannels || isAtRepForgeCap;
                                                                 const buttonStyle = isChannelDisabled
                                                                     ? isDarkModeEnabled
                                                                         ? { backgroundColor: "#030c21", color: "gray" }
@@ -2627,7 +2563,7 @@ const Connection: React.FC<ConnectionProps> = ({
                         </PopoverContent>
                     </Popover>
                 )}
-                {FFTDeviceConnected && (
+                {isDeviceConnected && !isSerial && (
                     <Popover>
                         <PopoverTrigger asChild>
                             <Button

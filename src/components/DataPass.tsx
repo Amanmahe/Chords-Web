@@ -6,6 +6,7 @@ import React, { useState, useCallback, useRef } from "react";
 import Canvas from "./Canvas";
 import Navbar from "./Navbar"; // Import the Navbar
 import FFT from "./FFT"; // Import the FFT
+import RepForge from "./RepForge"; // Import the RepForge view
 
 export type BitSelection = 10 | 12 | 14 | 16;
 
@@ -13,6 +14,7 @@ const DataPass = () => {
   const [selectedBits, setSelectedBits] = useState<BitSelection>(10); // Default to 10
   const [isConnected, setIsConnected] = useState<boolean>(false); // Connection status
   const [FFTConnected, setFFTConnected] = useState<boolean>(false); // Connection status
+  const [RepForgeConnected, setRepForgeConnected] = useState<boolean>(false); // Connection status
   const [isDisplay, setIsDisplay] = useState<boolean>(true); // Display state
   const [canvasCount, setCanvasCount] = useState<number>(1); // Number of canvases
   const [timeBase, setTimeBase] = useState<number>(4); // To track the current index to show
@@ -66,13 +68,27 @@ const DataPass = () => {
         />
       ) : FFTConnected ? (
         <FFT
+        pauseRef={pauseRef}
+        snapShotRef={snapShotRef}
+        currentSnapshot={currentSnapshot}
         selectedChannel={selectedChannel}
         Zoom={Zoom}
         ref={canvasRef} // Pass the ref to the Canvas component
         canvasCount={canvasCount} // Pass canvas count
         selectedChannels={selectedChannels}
         timeBase={timeBase}
-        currentSamplingRate={currentSamplingRate} 
+        currentSamplingRate={currentSamplingRate}
+        />
+      ) : RepForgeConnected ? (
+        <RepForge
+        pauseRef={pauseRef}
+        snapShotRef={snapShotRef}
+        currentSnapshot={currentSnapshot}
+        ref={canvasRef} // Pass the ref to the Canvas component
+        Zoom={Zoom}
+        selectedChannels={selectedChannels}
+        currentSamplingRate={currentSamplingRate}
+        timeBase={timeBase}
         />
       ): (
         <Steps />
@@ -83,6 +99,7 @@ const DataPass = () => {
         datastream={datastream}
         Connection={setIsConnected}
         FFT={setFFTConnected}
+        RepForge={setRepForgeConnected}
         selectedChannel={selectedChannel}
         setSelectedChannel={setSelectedChannel}
         selectedBits={selectedBits}

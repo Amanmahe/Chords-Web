@@ -15,6 +15,9 @@ import { WebglPlot, ColorRGBA, WebglLine } from "webgl-plot";
 import BrightCandleView from "./CandleLit";
 
 interface CanvasProps {
+    pauseRef: React.RefObject<boolean>;
+    snapShotRef: React.MutableRefObject<boolean[]>;
+    currentSnapshot: number;
     selectedChannel: number;
     canvasCount?: number;
     selectedChannels: number[];
@@ -26,6 +29,9 @@ interface CanvasProps {
 const FFT = forwardRef(
     (
         {
+            pauseRef,
+            snapShotRef,
+            currentSnapshot,
             selectedChannel,
             canvasCount = 6,
             timeBase = 4,
@@ -56,6 +62,18 @@ const FFT = forwardRef(
         const wglPlotsref = useRef<WebglPlot[]>([]);
         const linesRef = useRef<WebglLine[]>([]);
         const sweepPositions = useRef<number[]>(new Array(6).fill(0));
+
+        // Buffers used to remember the last few windows of data so that
+        // pausing can step back through recently seen snapshots.
+        const NUM_SNAPSHOT_BUFFERS = 6;
+        const rawBufferRef = useRef<number[][]>(
+            Array.from({ length: NUM_SNAPSHOT_BUFFERS }, () => [])
+        );
+        const fftSnapshotBufferRef = useRef<number[][]>(
+            Array.from({ length: NUM_SNAPSHOT_BUFFERS }, () => [])
+        );
+        const activeBufferIndexRef = useRef<number>(0);
+        const dataIndicesRef = useRef<number[]>([]);
 
         // Extend views to include 'fullcandle'
         const [activeBandPowerView, setActiveBandPowerView] = useState<
@@ -189,15 +207,51 @@ const FFT = forwardRef(
         const safeBufferSize = Math.max(1, Math.floor(rawBufferSize) || 1);
         const filter = new SmoothingFilter(safeBufferSize, 1);
 
+        // Reset the pause/snapshot buffers whenever the analyzed channel changes,
+        // since previously buffered data no longer corresponds to the new channel.
+        useEffect(() => {
+            rawBufferRef.current = Array.from({ length: NUM_SNAPSHOT_BUFFERS }, () => []);
+            fftSnapshotBufferRef.current = Array.from({ length: NUM_SNAPSHOT_BUFFERS }, () => []);
+            activeBufferIndexRef.current = 0;
+            dataIndicesRef.current = [];
+            snapShotRef.current = Array(NUM_SNAPSHOT_BUFFERS).fill(false);
+        }, [selectedChannel]);
+
+        // Buffers the raw sample into the currently active snapshot slot, flipping
+        // to the next slot once it's full (mirrors the Canvas component's approach).
+        const processBufferedData = useCallback((value: number) => {
+            const currentBuffer = rawBufferRef.current[activeBufferIndexRef.current];
+            currentBuffer.push(value);
+
+            if (currentBuffer.length >= dataPointCountRef.current) {
+                snapShotRef.current[activeBufferIndexRef.current] = true;
+                activeBufferIndexRef.current = (activeBufferIndexRef.current + 1) % NUM_SNAPSHOT_BUFFERS;
+                snapShotRef.current[activeBufferIndexRef.current] = false;
+                rawBufferRef.current[activeBufferIndexRef.current] = [];
+            }
+
+            // Indices of the 5 *complete* previous windows, oldest excluded and
+            // the still-filling active slot excluded — index 0 is the most
+            // recently completed window, not the one currently being written.
+            dataIndicesRef.current = Array.from(
+                { length: 5 },
+                (_, i) => (activeBufferIndexRef.current - i - 1 + NUM_SNAPSHOT_BUFFERS) % NUM_SNAPSHOT_BUFFERS
+            );
+        }, [snapShotRef]);
 
         useImperativeHandle(
             ref,
             () => ({
                 updateData(data: number[]) {
+                    // While paused, ignore incoming live data entirely; the display
+                    // is instead driven by whichever buffered snapshot is selected.
+                    if (!pauseRef.current) return;
+
                     for (let i = 0; i < 1; i++) {
                         const sensorValue = data[selectedChannel];
                         fftBufferRef.current[i].push(sensorValue);
                         updatePlot(sensorValue, Zoom);
+                        processBufferedData(sensorValue);
 
                         if (fftBufferRef.current[i].length > fftSize) {
                             fftBufferRef.current[i].shift();
@@ -215,13 +269,14 @@ const FFT = forwardRef(
                                 newData[i] = smoothedMags;
                                 return newData;
                             });
+                            fftSnapshotBufferRef.current[activeBufferIndexRef.current] = smoothedMags;
                             // prevent overflow
                             if (samplesReceivedRef.current > 1e9) samplesReceivedRef.current = 0;
                         }
                     }
                 },
             }),
-            [Zoom, timeBase, canvasCount, fftSize, currentSamplingRate, selectedChannel]
+            [Zoom, timeBase, canvasCount, fftSize, currentSamplingRate, selectedChannel, processBufferedData, pauseRef]
         );
 
         class FFT {
@@ -368,10 +423,47 @@ const FFT = forwardRef(
             createCanvasElement();
         }, [theme, timeBase]);
 
+        // Renders whichever buffered snapshot is selected while paused, replaying
+        // both the raw waveform and its matching FFT magnitudes (mirrors Canvas).
+        const updateSnapshot = useCallback((snapshotIndex: number) => {
+            const bufferIndex = dataIndicesRef.current[snapshotIndex];
+            if (bufferIndex === undefined) return;
+
+            const bufferedRaw = rawBufferRef.current[bufferIndex];
+            const line = linesRef.current[0];
+            if (bufferedRaw && bufferedRaw.length && line) {
+                try {
+                    // Write every point directly (NaN past the end of the buffer)
+                    // rather than shiftAdd, so the paused view always shows exactly
+                    // the selected snapshot instead of blending in stale live data.
+                    for (let p = 0; p < line.numPoints; p++) {
+                        line.setY(p, p < bufferedRaw.length ? bufferedRaw[p] : NaN);
+                    }
+                } catch (error) {
+                    console.warn("Error replaying buffered snapshot:", error);
+                }
+            }
+
+            const bufferedFft = fftSnapshotBufferRef.current[bufferIndex];
+            if (bufferedFft && bufferedFft.length) {
+                setFftData((prevData) => {
+                    const newData = [...prevData];
+                    newData[0] = bufferedFft;
+                    return newData;
+                });
+            }
+
+            wglPlotsref.current[0]?.update();
+        }, []);
+
         const animate = useCallback(() => {
-            wglPlotsref.current[0].update();
-            requestAnimationFrame(animate);
-        }, [wglPlotsref, Zoom]);
+            if (!pauseRef.current) {
+                updateSnapshot(currentSnapshot);
+            } else {
+                wglPlotsref.current[0].update();
+                requestAnimationFrame(animate);
+            }
+        }, [wglPlotsref, Zoom, pauseRef.current, currentSnapshot, updateSnapshot]);
 
         useEffect(() => {
             requestAnimationFrame(animate);
