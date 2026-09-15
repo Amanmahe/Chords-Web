@@ -8,6 +8,7 @@ import { Button } from "./ui/button";
 import Contributors from "./Contributors";
 import { Badge } from "./ui/badge";
 import { useTheme } from "next-themes";
+import packageJson from "../../package.json";
 
 const Navbar = ({ isDisplay }: { isDisplay: boolean }) => {
   const { theme, setTheme, systemTheme } = useTheme();
@@ -37,9 +38,9 @@ const Navbar = ({ isDisplay }: { isDisplay: boolean }) => {
             </Link>
             <Badge
               variant={"outline"}
-              className="font-poppins tracking-wider font-thin h-fit rounded "
+              className="font-poppins tracking-wider font-medium h-fit rounded border-purple-500/50 bg-purple-500/10 text-purple-600 dark:text-purple-300"
             >
-              Alpha
+              v{packageJson.version}
             </Badge>
           </div>
           <div className="flex gap-0 md:gap-2 items-center">
