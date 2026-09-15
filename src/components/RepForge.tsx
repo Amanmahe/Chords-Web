@@ -4,10 +4,8 @@ import React, {
     useRef,
     useState,
     useCallback,
-    useMemo,
     useImperativeHandle,
     forwardRef,
-    useLayoutEffect,
 } from "react";
 import { WebglPlot, ColorRGBA, WebglLine } from "webgl-plot";
 import { useTheme } from "next-themes";
@@ -20,6 +18,37 @@ interface RepForgeProps {
     currentSamplingRate: number;
     timeBase?: number;
     Zoom: number;
+}
+
+// One WebGL canvas + its plot/lines for a single channel, kept alive across
+// channel-selection changes so toggling a channel only creates/destroys the
+// canvas for that one channel instead of tearing down every trace on screen.
+type ChannelEntry = {
+    wrapper: HTMLDivElement;
+    canvas: HTMLCanvasElement;
+    wglp: WebglPlot;
+    lines: [WebglLine, WebglLine];
+};
+
+// One bar in the band-power chart. `scale` animates 0->1 when a channel is
+// newly selected (the bar grows/fades in) and 1->0 when deselected (the bar
+// shrinks/fades out before being dropped), so toggling a channel never snaps
+// the other bars straight to their new width/position.
+type BarEntry = {
+    channelNumber: number;
+    value: number;
+    scale: number;
+};
+
+const BAR_EASE_FACTOR = 0.18;
+
+function disposeChannelEntry(entry: ChannelEntry) {
+    const gl = entry.canvas.getContext("webgl");
+    if (gl) {
+        const loseContext = gl.getExtension("WEBGL_lose_context");
+        if (loseContext) loseContext.loseContext();
+    }
+    entry.wrapper.remove();
 }
 
 class EnvelopeFilter {
@@ -73,6 +102,10 @@ const RepForge = forwardRef(
         const envelopeFilters = useRef<EnvelopeFilter[]>([]);
         const selectedChannelsRef = useRef<number[]>(selectedChannels);
         const previousCounterRef = useRef<number | null>(null);
+        // Canvas/WebGL objects, keyed by channel number, that persist across
+        // channel-selection changes (see reconcileChannels below).
+        const channelEntriesRef = useRef<Map<number, ChannelEntry>>(new Map());
+        const prevSelectedChannelsRef = useRef<number[]>([]);
 
         // Buffers used to remember the last few windows of raw samples per
         // channel so that pausing can step back through recent snapshots.
@@ -96,20 +129,39 @@ const RepForge = forwardRef(
         const prevBandPowerData = useRef<number[]>([]);
         const [bandPowerData, setBandPowerData] = useState<number[]>([]);
         const powerBuffer = useRef<number[][]>([]);
-
-        const bandNames = useMemo(
-            () => selectedChannels.map((channelNumber) => `CH${channelNumber}`),
-            [selectedChannels]
-        );
+        // Animated bar state for the band-power chart — see BarEntry above.
+        const barEntriesRef = useRef<BarEntry[]>([]);
+        // Eases toward selectedChannels.length so the chart's decorative
+        // sizing (padding/fonts/gaps) transitions smoothly alongside the
+        // bars themselves, instead of snapping the instant a bar is added
+        // or fully removed.
+        const decorativeCountRef = useRef<number>(Math.max(selectedChannels.length, 1));
 
         useEffect(() => {
+            // Carry state over for channels that stay selected (matched by
+            // channel number, not array index) instead of wiping everything —
+            // an unrelated channel's envelope/sweep/band-power shouldn't
+            // jump or reset just because another channel was toggled.
+            const prevChannels = selectedChannelsRef.current;
+            const prevEnvelopeFilters = envelopeFilters.current;
+            const prevPowerBuffer = powerBuffer.current;
+            const prevSweepPositions = sweepPositions.current;
+            const prevBandData = prevBandPowerData.current;
+
+            const remapByChannel = <T,>(arr: T[], fallback: () => T): T[] =>
+                selectedChannels.map((channelNumber) => {
+                    const prevIndex = prevChannels.indexOf(channelNumber);
+                    return prevIndex !== -1 && arr[prevIndex] !== undefined ? arr[prevIndex] : fallback();
+                });
+
+            envelopeFilters.current = remapByChannel(prevEnvelopeFilters, () => new EnvelopeFilter(64));
+            powerBuffer.current = remapByChannel(prevPowerBuffer, () => []);
+            sweepPositions.current = remapByChannel(prevSweepPositions, () => 0);
+            const remappedBandData = remapByChannel(prevBandData, () => 0);
+
             selectedChannelsRef.current = selectedChannels;
-            envelopeFilters.current = selectedChannels.map(() => new EnvelopeFilter(64));
-            powerBuffer.current = selectedChannels.map(() => []);
-            const emptyBandData = selectedChannels.map(() => 0);
-            setBandPowerData(emptyBandData);
-            prevBandPowerData.current = emptyBandData;
-            sweepPositions.current = selectedChannels.map(() => 0);
+            setBandPowerData(remappedBandData);
+            prevBandPowerData.current = remappedBandData;
 
             // Keep the window size in sync with the Time-Base control (same
             // as Chords Visualizer) — falls back to the default until the
@@ -131,21 +183,57 @@ const RepForge = forwardRef(
             snapShotRef.current = Array(NUM_SNAPSHOT_BUFFERS).fill(false);
         }, [selectedChannels, timeBase, currentSamplingRate, snapShotRef]);
 
-        const createCanvasElements = useCallback(() => {
+        // Builds one channel's canvas/plot/lines. Used both for a full
+        // rebuild and to add a single newly-selected channel.
+        const buildChannelEntry = useCallback((channelNumber: number, container: HTMLDivElement, channelCount: number): ChannelEntry => {
+            const canvasWrapper = document.createElement("div");
+            canvasWrapper.className = "canvas-container relative flex-[1_1_0%]";
+
+            const canvas = document.createElement("canvas");
+            canvas.id = `repforge-canvas${channelNumber}`;
+            canvas.width = container.clientWidth;
+            canvas.height = container.clientHeight / channelCount;
+            canvas.className = "w-full h-full block rounded-xl";
+
+            const badge = document.createElement("div");
+            badge.className = "absolute text-gray-500 text-sm rounded-full p-2 m-2";
+            badge.innerText = `CH${channelNumber}`;
+
+            canvasWrapper.appendChild(badge);
+            canvasWrapper.appendChild(canvas);
+
+            const wglp = new WebglPlot(canvas);
+            wglp.gScaleY = Zoom;
+
+            const color1 = new ColorRGBA(1, 0, 0, 1); // Raw EMG
+            const color2 = new ColorRGBA(0, 1, 1, 1); // Envelope
+
+            const line1 = new WebglLine(color1, dataPointCountRef.current);
+            line1.lineSpaceX(-1, 2 / dataPointCountRef.current);
+            wglp.addLine(line1);
+
+            const line2 = new WebglLine(color2, dataPointCountRef.current);
+            line2.lineSpaceX(-1, 2 / dataPointCountRef.current);
+            wglp.addLine(line2);
+
+            return { wrapper: canvasWrapper, canvas, wglp, lines: [line1, line2] };
+        }, [Zoom]);
+
+        // Full teardown + rebuild of the grid and every channel's canvas.
+        // Only needed when the theme (grid colors) or the window size
+        // (timeBase / sampling rate, which changes how many points each line
+        // needs) changes — NOT on every channel toggle, which is handled
+        // incrementally by reconcileChannels below to avoid the flash/jitter
+        // a full WebGL context teardown causes on every trace.
+        const rebuildAll = useCallback(() => {
             const container = canvasContainerRef.current;
             if (!container) return;
 
-            // Clear existing child elements
+            channelEntriesRef.current.forEach(disposeChannelEntry);
+            channelEntriesRef.current.clear();
+
             while (container.firstChild) {
-                const firstChild = container.firstChild;
-                if (firstChild instanceof HTMLCanvasElement) {
-                    const gl = firstChild.getContext("webgl");
-                    if (gl) {
-                        const loseContext = gl.getExtension("WEBGL_lose_context");
-                        if (loseContext) loseContext.loseContext();
-                    }
-                }
-                container.removeChild(firstChild);
+                container.removeChild(container.firstChild);
             }
 
             const gridWrapper = document.createElement("div");
@@ -179,65 +267,109 @@ const RepForge = forwardRef(
             }
             container.appendChild(gridWrapper);
 
+            const channels = selectedChannelsRef.current;
             wglpRefs.current = [];
             linesRefs.current = [];
 
-            selectedChannels.forEach((channelNumber, index) => {
-                const canvasWrapper = document.createElement("div");
-                canvasWrapper.className = "canvas-container relative flex-[1_1_0%]";
-
-                const canvas = document.createElement("canvas");
-                canvas.id = `repforge-canvas${channelNumber}`;
-                canvas.width = container.clientWidth;
-                canvas.height = container.clientHeight / selectedChannels.length;
-                canvas.className = "w-full h-full block rounded-xl";
-
-                const badge = document.createElement("div");
-                badge.className = "absolute text-gray-500 text-sm rounded-full p-2 m-2";
-                badge.innerText = `CH${channelNumber}`;
-
-                canvasWrapper.appendChild(badge);
-                canvasWrapper.appendChild(canvas);
-                container.appendChild(canvasWrapper);
-
-                const wglp = new WebglPlot(canvas);
-                wglp.gScaleY = Zoom;
-                wglpRefs.current[index] = wglp;
-
-                const color1 = new ColorRGBA(1, 0, 0, 1); // Raw EMG
-                const color2 = new ColorRGBA(0, 1, 1, 1); // Envelope
-
-                const line1 = new WebglLine(color1, dataPointCountRef.current);
-                line1.lineSpaceX(-1, 2 / dataPointCountRef.current);
-                wglp.addLine(line1);
-
-                const line2 = new WebglLine(color2, dataPointCountRef.current);
-                line2.lineSpaceX(-1, 2 / dataPointCountRef.current);
-                wglp.addLine(line2);
-
-                linesRefs.current[index] = [line1, line2];
+            channels.forEach((channelNumber, index) => {
+                const entry = buildChannelEntry(channelNumber, container, channels.length);
+                container.appendChild(entry.wrapper);
+                channelEntriesRef.current.set(channelNumber, entry);
+                wglpRefs.current[index] = entry.wglp;
+                linesRefs.current[index] = entry.lines;
             });
 
-            sweepPositions.current = selectedChannels.map(() => 0);
-            // Zoom is intentionally excluded here: it's read fresh whenever
-            // this does run (for another reason), but shouldn't by itself
-            // trigger a full canvas recreation — that wipes the buffered
-            // waveform data. The effect below already updates gScaleY on the
-            // existing plots whenever Zoom changes, without recreating them.
-        }, [selectedChannels, theme, timeBase, currentSamplingRate]);
-
-        useLayoutEffect(() => {
-            if (!canvasContainerRef.current) return;
-            const ro = new ResizeObserver(() => {
-                createCanvasElements();
-            });
-            ro.observe(canvasContainerRef.current);
-            return () => ro.disconnect();
-        }, [createCanvasElements]);
+            prevSelectedChannelsRef.current = channels;
+            sweepPositions.current = channels.map(() => 0);
+        }, [theme, buildChannelEntry]);
 
         useEffect(() => {
-            createCanvasElements();
-        }, [createCanvasElements]);
+            rebuildAll();
+            // timeBase/currentSamplingRate aren't read directly in rebuildAll,
+            // but they change dataPointCountRef.current (via the reset effect
+            // above, which runs first) — a full rebuild is required whenever
+            // that changes since WebglLine's point count can't be resized in
+            // place.
+        }, [rebuildAll, timeBase, currentSamplingRate]);
+
+        // Resizes existing canvases in place (canvas width/height + GL
+        // viewport) without touching their WebGL context or line data.
+        const resizeCanvases = useCallback(() => {
+            const container = canvasContainerRef.current;
+            if (!container) return;
+            const entries = channelEntriesRef.current;
+            const channelCount = entries.size;
+            if (channelCount === 0) return;
+            const newWidth = container.clientWidth;
+            const newHeight = container.clientHeight / channelCount;
+            entries.forEach((entry) => {
+                if (entry.canvas.width !== newWidth || entry.canvas.height !== newHeight) {
+                    entry.canvas.width = newWidth;
+                    entry.canvas.height = newHeight;
+                    entry.wglp.viewport(0, 0, newWidth, newHeight);
+                }
+            });
+        }, []);
+
+        // Adds/removes only the canvases for channels that were actually
+        // toggled, keeping every other channel's WebGL context, lines and
+        // in-progress sweep untouched — this is what makes toggling a
+        // channel smooth instead of flashing every trace on screen.
+        const reconcileChannels = useCallback(() => {
+            const container = canvasContainerRef.current;
+            if (!container) return;
+
+            const prevChannels = prevSelectedChannelsRef.current;
+            const nextChannels = selectedChannels;
+            const nextSet = new Set(nextChannels);
+            const entries = channelEntriesRef.current;
+
+            prevChannels.forEach((channelNumber) => {
+                if (!nextSet.has(channelNumber)) {
+                    const entry = entries.get(channelNumber);
+                    if (entry) {
+                        disposeChannelEntry(entry);
+                        entries.delete(channelNumber);
+                    }
+                }
+            });
+
+            nextChannels.forEach((channelNumber) => {
+                if (!entries.has(channelNumber)) {
+                    entries.set(channelNumber, buildChannelEntry(channelNumber, container, nextChannels.length));
+                }
+            });
+
+            wglpRefs.current = [];
+            linesRefs.current = [];
+            nextChannels.forEach((channelNumber, index) => {
+                const entry = entries.get(channelNumber);
+                if (!entry) return;
+                // Re-appending an existing node moves it rather than
+                // duplicating it, so this also reorders canvases to match
+                // the current selection order.
+                container.appendChild(entry.wrapper);
+                wglpRefs.current[index] = entry.wglp;
+                linesRefs.current[index] = entry.lines;
+            });
+
+            resizeCanvases();
+            prevSelectedChannelsRef.current = nextChannels;
+        }, [selectedChannels, buildChannelEntry, resizeCanvases]);
+
+        useEffect(() => {
+            reconcileChannels();
+        }, [reconcileChannels]);
+
+        useEffect(() => {
+            const container = canvasContainerRef.current;
+            if (!container) return;
+            const ro = new ResizeObserver(() => {
+                resizeCanvases();
+            });
+            ro.observe(container);
+            return () => ro.disconnect();
+        }, [resizeCanvases]);
 
         useEffect(() => {
             wglpRefs.current.forEach((wglp) => {
@@ -307,11 +439,11 @@ const RepForge = forwardRef(
         }, [animate]);
 
         const drawGraph = useCallback(
-            (data: number[]) => {
+            (entries: BarEntry[], decorativeCount: number) => {
                 const canvas = canvasRef.current;
                 const container = containerRef.current;
                 if (!canvas || !container) return;
-                if (data.some(isNaN) || data.length === 0) return;
+                if (entries.length === 0 || entries.some((e) => isNaN(e.value))) return;
 
                 container.style.display = 'block';
                 const { width: cssW, height: cssH } = container.getBoundingClientRect();
@@ -334,7 +466,14 @@ const RepForge = forwardRef(
                 const W = cssW;
                 const H = cssH;
 
-                const barCount = data.length;
+                // The number of bar "slots" (including ones currently
+                // animating out) drives gap count as before; each slot's
+                // actual on-screen width is its own animated share of the
+                // total, computed below, so a bar grows in / shrinks out
+                // smoothly instead of every bar snapping straight to a new
+                // evenly-divided width.
+                const slotCount = entries.length;
+                const totalScale = entries.reduce((sum, e) => sum + e.scale, 0) || 1;
 
                 // Scale padding/gap/radius/font against the panel's width at
                 // MAX_REPFORGE_CHANNELS, not its actual current width — the
@@ -342,7 +481,11 @@ const RepForge = forwardRef(
                 // each bar keeps a fixed width), but that shouldn't also
                 // shrink the gap between bars or the padding around them;
                 // everything should look exactly like the 6-channel case.
-                const equivalentWidthAtMaxChannels = W * (MAX_REPFORGE_CHANNELS / barCount);
+                // Based on the eased `decorativeCount` (not the raw,
+                // possibly near-zero `totalScale`) so padding/fonts/gaps
+                // transition smoothly too, instead of momentarily blowing up
+                // while a bar is still mostly grown-in.
+                const equivalentWidthAtMaxChannels = W * (MAX_REPFORGE_CHANNELS / decorativeCount);
                 const scale = equivalentWidthAtMaxChannels / 800;
                 const padding = 5 * scale;
 
@@ -352,9 +495,11 @@ const RepForge = forwardRef(
                 // The gap between bars is a fixed pixel amount (not a fraction of
                 // the per-bar width), so the bar group always occupies the same
                 // total width — whether there's 1 channel or MAX_REPFORGE_CHANNELS.
-                const barGap = barCount > 1 ? 8 * scale : 0;
+                const barGap = slotCount > 1 ? 8 * scale : 0;
                 const barSpace = barGap;
-                const barActW = (availableWidth - barGap * (barCount - 1)) / barCount;
+                // Width one full (scale === 1) bar gets; each entry's actual
+                // width is this times its own animated scale.
+                const unitBarWidth = (availableWidth - barGap * (slotCount - 1)) / totalScale;
 
                 const axisGap = Math.max(1 * scale, 1);
                 let labelBoxH = 40 * scale;
@@ -371,30 +516,42 @@ const RepForge = forwardRef(
                 // width so neither ever grows past the box or overlaps its
                 // neighbors when there are many bars.
                 const pillHeight = Math.max(Math.min(barAreaH * 0.09, 28 * scale), 16);
-                const pillFontLabel = Math.max(Math.min(pillHeight * 0.45, barActW * 0.2), 10);
-                const baseFontLabel = Math.max(Math.min(labelBoxH * 0.35, barActW * 0.18), 10);
+                const pillFontLabel = Math.max(Math.min(pillHeight * 0.45, unitBarWidth * 0.2), 10);
+                const baseFontLabel = Math.max(Math.min(labelBoxH * 0.35, unitBarWidth * 0.18), 10);
                 // With only one bar there's plenty of spare room, so size the
                 // value up a bit rather than leaving it at the multi-bar size.
-                const fontLabel = barCount === 1 ? baseFontLabel * 1.25 : baseFontLabel;
+                const fontLabel = slotCount === 1 ? baseFontLabel * 1.25 : baseFontLabel;
 
                 const axisColor = theme === "dark" ? "#fff" : "#000";
                 const bgColor = theme === "dark" ? "#020817" : "#fff";
                 const radius = 15 * scale;
 
-                data.forEach((v, i) => {
+                entries.forEach((entry, i) => {
                     if (!powerBuffer.current[i]) powerBuffer.current[i] = [];
                     if (powerBuffer.current[i].length >= 500) powerBuffer.current[i].shift();
-                    powerBuffer.current[i].push(v);
+                    powerBuffer.current[i].push(entry.value);
                 });
 
-                const totalBarsWidth = barCount * barActW + (barCount - 1) * barSpace;
+                const totalBarsWidth = entries.reduce((sum, e) => sum + unitBarWidth * e.scale, 0) + (slotCount - 1) * barSpace;
                 const barsLeftMargin = Math.max(0, (W - totalBarsWidth) / 2);
 
-                data.forEach((v, i) => {
-                    const adjustedBarPosition = barsLeftMargin + i * (barActW + barSpace);
-                    const x0 = Math.min(adjustedBarPosition, W - padding - barActW);
-                    const barY = padding;
+                // Running left edge — each bar's width is its own animated
+                // share, so bars sliding to make room for a growing/shrinking
+                // neighbor falls out of this cumulative layout naturally.
+                let cursorX = barsLeftMargin;
+                const layout = entries.map((entry) => {
+                    const barActW = Math.max(unitBarWidth * entry.scale, 0.01);
+                    const x0 = cursorX;
+                    cursorX += barActW + barSpace;
+                    return { entry, x0, barActW };
+                });
 
+                layout.forEach(({ entry, x0, barActW }, i) => {
+                    const v = entry.value;
+                    const barY = padding;
+                    const alpha = entry.scale;
+
+                    ctx.globalAlpha = alpha;
                     ctx.fillStyle = bgColor;
                     ctx.strokeStyle = axisColor;
                     ctx.lineWidth = 1;
@@ -429,20 +586,18 @@ const RepForge = forwardRef(
                     ctx.beginPath();
                     ctx.roundRect(x0, barTopY, barActW, bh);
                     ctx.fill();
+                    ctx.globalAlpha = 1;
                 });
 
                 // Channel pill, overlaid near the top of each bar rather than
                 // reserved in a separate box — the bar keeps rendering in
                 // full behind it, this just floats on top (same idea as the
                 // "CH1"/"CH2" badges on the raw waveform panel).
-                data.forEach((_v, i) => {
-                    const adjustedBarPosition = barsLeftMargin + i * (barActW + barSpace);
-                    const x0 = Math.min(adjustedBarPosition, W - padding - barActW);
+                layout.forEach(({ entry, x0, barActW }) => {
                     const barY = padding;
+                    const labelText = `CH${entry.channelNumber}`;
 
-                    const channelNumber = bandNames[i]?.replace(/^CH/i, "") ?? i + 1;
-                    const labelText = `CH${channelNumber}`;
-
+                    ctx.globalAlpha = entry.scale;
                     ctx.font = `bold ${pillFontLabel}px Arial`;
                     const textWidth = ctx.measureText(labelText).width;
                     const pillPaddingX = 8 * scale;
@@ -463,17 +618,16 @@ const RepForge = forwardRef(
                     ctx.textAlign = "center";
                     ctx.textBaseline = "middle";
                     ctx.fillText(labelText, pillX + pillWidth / 2, pillY + pillHeight / 2);
+                    ctx.globalAlpha = 1;
                 });
 
                 // Current-value box below each bar — channel identity now
                 // lives in the pill above, so this only shows the number.
-                data.forEach((v, i) => {
-                    const adjustedBarPosition = barsLeftMargin + i * (barActW + barSpace);
-                    const x0 = Math.min(adjustedBarPosition, W - padding - barActW);
-
+                layout.forEach(({ entry, x0, barActW }) => {
                     const labelX = x0 + barActW / 2;
                     const labelY = padding + barAreaH + axisGap;
 
+                    ctx.globalAlpha = entry.scale;
                     ctx.fillStyle = bgColor;
                     ctx.strokeStyle = axisColor;
 
@@ -486,26 +640,62 @@ const RepForge = forwardRef(
                     ctx.font = `bold ${fontLabel}px Arial`;
                     ctx.textAlign = "center";
                     ctx.textBaseline = "middle";
-                    ctx.fillText(v.toFixed(2), labelX, labelY + labelBoxH / 2);
+                    ctx.fillText(entry.value.toFixed(2), labelX, labelY + labelBoxH / 2);
+                    ctx.globalAlpha = 1;
                 });
             },
-            [theme, bandNames]
+            [theme]
         );
 
         const animateGraph = useCallback(() => {
-            const interpolationFactor = 0.1;
+            const selectedSet = new Set(selectedChannels);
+            const valueByChannel = new Map<number, number>(
+                selectedChannels.map((channelNumber, i) => [channelNumber, bandPowerData[i] ?? 0])
+            );
 
-            const currentValues = bandPowerData.map((target, i) => {
-                const prev = prevBandPowerData.current[i] ?? 0;
-                return prev + (target - prev) * interpolationFactor;
+            // Reconcile the animated bar list against the current selection:
+            // entries for channels still selected are kept (so their scale
+            // keeps easing rather than resetting); entries for deselected
+            // channels are kept too, but eased toward scale 0 and value 0,
+            // and only dropped once fully shrunk — that's what makes a
+            // removed channel's bar shrink/fade out instead of vanishing
+            // instantly and snapping the rest of the layout.
+            const prevEntries = barEntriesRef.current;
+            const nextEntries: BarEntry[] = [];
+            prevEntries.forEach((entry) => {
+                if (selectedSet.has(entry.channelNumber) || entry.scale > 0.01) {
+                    nextEntries.push(entry);
+                }
+            });
+            selectedChannels.forEach((channelNumber) => {
+                if (!nextEntries.some((e) => e.channelNumber === channelNumber)) {
+                    nextEntries.push({ channelNumber, value: 0, scale: 0 });
+                }
             });
 
-            drawGraph(currentValues);
-            prevBandPowerData.current = currentValues;
-            latestDataRef.current = currentValues;
+            nextEntries.forEach((entry) => {
+                const isSelected = selectedSet.has(entry.channelNumber);
+                const targetScale = isSelected ? 1 : 0;
+                entry.scale += (targetScale - entry.scale) * BAR_EASE_FACTOR;
+                if (Math.abs(targetScale - entry.scale) < 0.002) entry.scale = targetScale;
+
+                const targetValue = isSelected ? (valueByChannel.get(entry.channelNumber) ?? 0) : 0;
+                entry.value += (targetValue - entry.value) * BAR_EASE_FACTOR;
+            });
+
+            barEntriesRef.current = nextEntries;
+
+            const targetDecorativeCount = Math.max(selectedChannels.length, 1);
+            decorativeCountRef.current += (targetDecorativeCount - decorativeCountRef.current) * BAR_EASE_FACTOR;
+            if (Math.abs(targetDecorativeCount - decorativeCountRef.current) < 0.01) {
+                decorativeCountRef.current = targetDecorativeCount;
+            }
+
+            drawGraph(nextEntries, decorativeCountRef.current);
+            latestDataRef.current = nextEntries.map((e) => e.value);
 
             animationRef.current = requestAnimationFrame(animateGraph);
-        }, [bandPowerData, drawGraph]);
+        }, [bandPowerData, selectedChannels, drawGraph]);
 
         useEffect(() => {
             animationRef.current = requestAnimationFrame(animateGraph);
