@@ -39,7 +39,12 @@ const Canvas = forwardRef(
         }: CanvasProps,
         ref
     ) => {
-        const { theme } = useTheme();
+        // Use resolvedTheme, not theme: the app defaults to the "system"
+        // setting, so `theme` stays the literal string "system" until the
+        // user manually picks light/dark — every `theme === "dark"` check
+        // below would then be false even on a dark system, leaving the
+        // WebGL-drawn lines/grid in light colors against a dark page.
+        const { resolvedTheme: theme } = useTheme();
         const previousCounterRef = useRef<number | null>(null); // Variable to store the previous counter value for loss detection
         const canvasContainerRef = useRef<HTMLDivElement>(null);
         const [numChannels, setNumChannels] = useState<number>(selectedChannels.length);
@@ -401,7 +406,8 @@ const Canvas = forwardRef(
                     dataIndicesRef.current &&
                     dataIndicesRef.current[currentSnapshot] !== undefined &&
                     array3DRef.current[dataIndicesRef.current[currentSnapshot]] &&
-                    array3DRef.current[dataIndicesRef.current[currentSnapshot]][i]) {
+                    array3DRef.current[dataIndicesRef.current[currentSnapshot]][i] &&
+                    array3DRef.current[dataIndicesRef.current[currentSnapshot]][i].length > 0) {
 
                     const channelData = array3DRef.current[dataIndicesRef.current[currentSnapshot]][i];
 

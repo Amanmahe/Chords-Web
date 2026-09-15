@@ -60,7 +60,8 @@ const RepForge = forwardRef(
         { pauseRef, snapShotRef, currentSnapshot, selectedChannels, currentSamplingRate, timeBase = DEFAULT_TIME_BASE_SECONDS, Zoom }: RepForgeProps,
         ref
     ) => {
-        const { theme } = useTheme();
+        // Use resolvedTheme, not theme: see the comment in Canvas.tsx.
+        const { resolvedTheme: theme } = useTheme();
         const canvasContainerRef = useRef<HTMLDivElement>(null);
         // Window size in samples, kept in sync with timeBase/currentSamplingRate
         // (see the reset effect below) so the Time-Base control in the toolbar
@@ -218,7 +219,12 @@ const RepForge = forwardRef(
             });
 
             sweepPositions.current = selectedChannels.map(() => 0);
-        }, [selectedChannels, theme, Zoom, timeBase, currentSamplingRate]);
+            // Zoom is intentionally excluded here: it's read fresh whenever
+            // this does run (for another reason), but shouldn't by itself
+            // trigger a full canvas recreation — that wipes the buffered
+            // waveform data. The effect below already updates gScaleY on the
+            // existing plots whenever Zoom changes, without recreating them.
+        }, [selectedChannels, theme, timeBase, currentSamplingRate]);
 
         useLayoutEffect(() => {
             if (!canvasContainerRef.current) return;
@@ -279,8 +285,12 @@ const RepForge = forwardRef(
             });
 
             setBandPowerData(envValues);
-            wglpRefs.current.forEach((wglp) => wglp && wglp.update());
-        }, []);
+            wglpRefs.current.forEach((wglp) => {
+                if (!wglp) return;
+                wglp.gScaleY = Zoom;
+                wglp.update();
+            });
+        }, [Zoom]);
 
         const animate = useCallback(() => {
             if (!pauseRef.current) {
@@ -324,11 +334,17 @@ const RepForge = forwardRef(
                 const W = cssW;
                 const H = cssH;
 
-                const scale = W / 800;
-                const padding = 5 * scale;
-                const axisGap = Math.max(1 * scale, 1);
-
                 const barCount = data.length;
+
+                // Scale padding/gap/radius/font against the panel's width at
+                // MAX_REPFORGE_CHANNELS, not its actual current width — the
+                // panel itself shrinks as fewer channels are selected (so
+                // each bar keeps a fixed width), but that shouldn't also
+                // shrink the gap between bars or the padding around them;
+                // everything should look exactly like the 6-channel case.
+                const equivalentWidthAtMaxChannels = W * (MAX_REPFORGE_CHANNELS / barCount);
+                const scale = equivalentWidthAtMaxChannels / 800;
+                const padding = 5 * scale;
 
                 const availableWidth = W - (padding * 2);
                 // Bars always divide up the full available width evenly: one
@@ -340,6 +356,7 @@ const RepForge = forwardRef(
                 const barSpace = barGap;
                 const barActW = (availableWidth - barGap * (barCount - 1)) / barCount;
 
+                const axisGap = Math.max(1 * scale, 1);
                 let labelBoxH = 40 * scale;
 
                 const barAreaH = H - padding * 2 - labelBoxH - axisGap;
@@ -348,12 +365,16 @@ const RepForge = forwardRef(
                     labelBoxH *= 0.8;
                 }
 
-                // Scale with the label box's own height (like before), and cap
-                // against each bar's width so the "1 | 0.02" text never grows
-                // past the box or overlaps its neighbors when there are many bars.
+                // The channel pill overlaid near the top of the bar (the bar
+                // keeps drawing behind it) is sized off the label box height,
+                // and the bottom value label is capped against each bar's
+                // width so neither ever grows past the box or overlaps its
+                // neighbors when there are many bars.
+                const pillHeight = Math.max(Math.min(barAreaH * 0.09, 28 * scale), 16);
+                const pillFontLabel = Math.max(Math.min(pillHeight * 0.45, barActW * 0.2), 10);
                 const baseFontLabel = Math.max(Math.min(labelBoxH * 0.35, barActW * 0.18), 10);
                 // With only one bar there's plenty of spare room, so size the
-                // label up a bit rather than leaving it at the multi-bar size.
+                // value up a bit rather than leaving it at the multi-bar size.
                 const fontLabel = barCount === 1 ? baseFontLabel * 1.25 : baseFontLabel;
 
                 const axisColor = theme === "dark" ? "#fff" : "#000";
@@ -410,6 +431,42 @@ const RepForge = forwardRef(
                     ctx.fill();
                 });
 
+                // Channel pill, overlaid near the top of each bar rather than
+                // reserved in a separate box — the bar keeps rendering in
+                // full behind it, this just floats on top (same idea as the
+                // "CH1"/"CH2" badges on the raw waveform panel).
+                data.forEach((_v, i) => {
+                    const adjustedBarPosition = barsLeftMargin + i * (barActW + barSpace);
+                    const x0 = Math.min(adjustedBarPosition, W - padding - barActW);
+                    const barY = padding;
+
+                    const channelNumber = bandNames[i]?.replace(/^CH/i, "") ?? i + 1;
+                    const labelText = `CH${channelNumber}`;
+
+                    ctx.font = `bold ${pillFontLabel}px Arial`;
+                    const textWidth = ctx.measureText(labelText).width;
+                    const pillPaddingX = 8 * scale;
+                    const pillWidth = Math.min(textWidth + pillPaddingX * 2, barActW - 4 * scale);
+                    const pillMarginTop = 6 * scale;
+                    const pillX = x0 + barActW / 2 - pillWidth / 2;
+                    const pillY = barY + pillMarginTop;
+
+                    ctx.fillStyle = bgColor;
+                    ctx.strokeStyle = axisColor;
+                    ctx.lineWidth = 1;
+                    ctx.beginPath();
+                    ctx.roundRect(pillX, pillY, pillWidth, pillHeight, pillHeight / 2);
+                    ctx.fill();
+                    ctx.stroke();
+
+                    ctx.fillStyle = axisColor;
+                    ctx.textAlign = "center";
+                    ctx.textBaseline = "middle";
+                    ctx.fillText(labelText, pillX + pillWidth / 2, pillY + pillHeight / 2);
+                });
+
+                // Current-value box below each bar — channel identity now
+                // lives in the pill above, so this only shows the number.
                 data.forEach((v, i) => {
                     const adjustedBarPosition = barsLeftMargin + i * (barActW + barSpace);
                     const x0 = Math.min(adjustedBarPosition, W - padding - barActW);
@@ -429,8 +486,7 @@ const RepForge = forwardRef(
                     ctx.font = `bold ${fontLabel}px Arial`;
                     ctx.textAlign = "center";
                     ctx.textBaseline = "middle";
-                    const channelNumber = bandNames[i]?.replace(/^CH/i, "") ?? i + 1;
-                    ctx.fillText(`${channelNumber} | ${v.toFixed(2)}`, labelX, labelY + labelBoxH / 2);
+                    ctx.fillText(v.toFixed(2), labelX, labelY + labelBoxH / 2);
                 });
             },
             [theme, bandNames]
@@ -565,10 +621,23 @@ const RepForge = forwardRef(
             [processBufferedData, pauseRef]
         );
 
+        // The right panel's width scales with how many channels are selected,
+        // so every bar keeps the same fixed ("universal") width no matter the
+        // count — that width is whatever a single bar gets when all
+        // MAX_REPFORGE_CHANNELS are selected (the panel's original 1/3 share,
+        // split 6 ways). The left (raw waveform) panel takes up whatever
+        // width that leaves, so with 1 channel it's nearly the full width and
+        // it shrinks back down as more channels are added.
+        const rightPanelWidthPercent = (Math.min(selectedChannels.length, MAX_REPFORGE_CHANNELS) / MAX_REPFORGE_CHANNELS) * (100 / 3);
+        const leftPanelWidthPercent = 100 - rightPanelWidthPercent;
+
         return (
             <div className="flex flex-row flex-1 overflow-auto relative">
                 {/* Left Panel: raw EMG + envelope */}
-                <main className="w-2/3 m-3 relative flex bg-highlight rounded-2xl">
+                <main
+                    style={{ width: `${leftPanelWidthPercent}%` }}
+                    className="m-3 relative flex bg-highlight rounded-2xl"
+                >
                     <div
                         ref={canvasContainerRef}
                         className="absolute inset-0 rounded-2xl"
@@ -576,7 +645,10 @@ const RepForge = forwardRef(
                 </main>
 
                 {/* Right Panel: band power bar chart */}
-                <main className="w-1/3 m-3 relative flex overflow-hidden">
+                <main
+                    style={{ width: `${rightPanelWidthPercent}%` }}
+                    className="m-3 relative flex overflow-hidden"
+                >
                     <div
                         ref={containerRef}
                         className="absolute inset-0 rounded-2xl"

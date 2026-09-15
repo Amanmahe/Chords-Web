@@ -143,7 +143,11 @@ const Connection: React.FC<ConnectionProps> = ({
     const [open, setOpen] = useState(false);
     const [isPauseState, setIsPauseState] = useState(false);
     // UI Themes & Modes
-    const { theme } = useTheme(); // Current theme of the app
+    // Use resolvedTheme, not theme: the app defaults to the "system" theme
+    // setting, so `theme` stays the literal string "system" until the user
+    // manually picks light/dark, making `theme === "dark"` false even on a
+    // dark system and leaving these elements styled for light mode.
+    const { resolvedTheme: theme } = useTheme(); // Current theme of the app
     const isDarkModeEnabled = theme === "dark"; // Boolean to check if dark mode is enabled
     const router = useRouter(); // Use Next.js router for navigation
     // Determine the current theme without redeclaring 'theme'
@@ -782,7 +786,16 @@ const Connection: React.FC<ConnectionProps> = ({
                 if (writer) {
                     writerRef.current = writer;
                     const whoAreYouMessage = new TextEncoder().encode("WHORU\n");
-                    setTimeout(() => writer.write(whoAreYouMessage), serialTimeout);
+                    setTimeout(() => {
+                        writer.write(whoAreYouMessage).catch((error) => {
+                            // The writer can already be released by the time this
+                            // fires (e.g. the user disconnected before the delay
+                            // elapsed) — surface it as a toast instead of an
+                            // unhandled rejection/error overlay.
+                            console.warn("Failed to send device handshake:", error);
+                            toast.error("Could not communicate with the device. Please try reconnecting.");
+                        });
+                    }, serialTimeout);
                     let buffer = "";
                     while (true) {
                         const { value, done } = await reader.read();
@@ -845,7 +858,15 @@ const Connection: React.FC<ConnectionProps> = ({
                     });
 
                     const startMessage = new TextEncoder().encode("START\n");
-                    setTimeout(() => writer.write(startMessage), 2000);
+                    setTimeout(() => {
+                        writer.write(startMessage).catch((error) => {
+                            // Same as above: the writer may already be released
+                            // by the time this fires, so catch it instead of
+                            // letting it surface as an unhandled rejection.
+                            console.warn("Failed to send START command:", error);
+                            toast.error("Could not start the data stream. Please try reconnecting.");
+                        });
+                    }, 2000);
                 } else {
                     console.warn("Writable stream not available");
                 }
@@ -961,6 +982,15 @@ const Connection: React.FC<ConnectionProps> = ({
             setIsDeviceConnected(false);
             isDeviceConnectedRef.current = false;
             isRecordingRef.current = false;
+            // Reset pause/rewind state too — this runs whether the user
+            // clicked Disconnect or the device dropped out physically, and
+            // either way stale pause state shouldn't carry into the next
+            // connection.
+            setIsDisplay(true);
+            onPauseChange(true);
+            setIsPauseState(false);
+            setLeftArrowClickCount(0);
+            SetCurrentSnapshot(0);
             Connection(false);
         }
 
@@ -1252,6 +1282,17 @@ const Connection: React.FC<ConnectionProps> = ({
             FFT(false);
             RepForge(false);
             Connection(false);
+
+            // Reset recording and pause/rewind state — this runs whether the
+            // user clicked Disconnect or the device dropped out physically
+            // (detected via the no-samples-received watchdog), and either
+            // way stale state shouldn't carry into the next connection.
+            isRecordingRef.current = false;
+            setIsDisplay(true);
+            onPauseChange(true);
+            setIsPauseState(false);
+            setLeftArrowClickCount(0);
+            SetCurrentSnapshot(0);
 
             // Reset battery state
             setBatteryLevel(null);
@@ -1692,7 +1733,7 @@ const Connection: React.FC<ConnectionProps> = ({
                                     <Button
                                         className="flex items-center gap-1 py-2 px-4 rounded-xl font-semibold"
                                         onClick={() => (isDeviceConnected ? (isSerial ? disconnectDevice() : disconnect()) : undefined)}
-                                        disabled={isLoading || isfftLoading}
+                                        disabled={isLoading || isfftLoading || isRecordingRef.current}
                                     >
                                         {isLoading || isfftLoading ? (
                                             <>
@@ -1762,6 +1803,7 @@ const Connection: React.FC<ConnectionProps> = ({
                             variant={!FFTDeviceConnected && !RepForgeDeviceConnected ? "default" : "outline"}
                             className="flex items-center gap-1 rounded-xl rounded-r-none"
                             onClick={() => switchToView('chords')}
+                            disabled={isRecordingRef.current || isPauseState}
                         >
                             <Activity size={17} className="min-[1230px]:hidden" />
                             <span className="hidden min-[1230px]:inline">Chords Visualizer</span>
@@ -1770,6 +1812,7 @@ const Connection: React.FC<ConnectionProps> = ({
                             variant={FFTDeviceConnected ? "default" : "outline"}
                             className="flex items-center gap-1 rounded-none"
                             onClick={() => switchToView('fft')}
+                            disabled={isRecordingRef.current || isPauseState}
                         >
                             <AudioLines size={17} className="min-[1230px]:hidden" />
                             <span className="hidden min-[1230px]:inline">FFT Visualizer</span>
@@ -1778,6 +1821,7 @@ const Connection: React.FC<ConnectionProps> = ({
                             variant={RepForgeDeviceConnected ? "default" : "outline"}
                             className="flex items-center gap-1 rounded-xl rounded-l-none"
                             onClick={() => switchToView('repforge')}
+                            disabled={isRecordingRef.current || isPauseState}
                         >
                             <BicepsFlexed size={17} className="min-[1230px]:hidden" />
                             <span className="hidden min-[1230px]:inline">Rep-Forge</span>
@@ -1787,14 +1831,22 @@ const Connection: React.FC<ConnectionProps> = ({
                 {/* Display (Play/Pause) button with tooltip */}
                 {isDeviceConnected && (
                     <div className="flex items-center gap-0.5 mx-0 px-0">
-                        <Button
-                            className="rounded-xl rounded-r-none"
-                            onClick={handlePrevSnapshot}
-                            disabled={isDisplay || leftArrowClickCount >= enabledClicks}
-
-                        >
-                            <ArrowLeftToLine size={16} />
-                        </Button>
+                        <TooltipProvider>
+                            <Tooltip>
+                                <TooltipTrigger asChild>
+                                    <Button
+                                        className="rounded-xl rounded-r-none"
+                                        onClick={handlePrevSnapshot}
+                                        disabled={isDisplay || leftArrowClickCount >= enabledClicks}
+                                    >
+                                        <ArrowLeftToLine size={16} />
+                                    </Button>
+                                </TooltipTrigger>
+                                <TooltipContent>
+                                    <p>View Previous Data Window</p>
+                                </TooltipContent>
+                            </Tooltip>
+                        </TooltipProvider>
                         <TooltipProvider>
                             <Tooltip>
                                 <TooltipTrigger asChild>
@@ -1813,13 +1865,22 @@ const Connection: React.FC<ConnectionProps> = ({
                                 </TooltipContent>
                             </Tooltip>
                         </TooltipProvider>
-                        <Button
-                            className="rounded-xl rounded-l-none"
-                            onClick={handleNextSnapshot}
-                            disabled={isDisplay || leftArrowClickCount == 0}
-                        >
-                            <ArrowRightToLine size={16} />
-                        </Button>
+                        <TooltipProvider>
+                            <Tooltip>
+                                <TooltipTrigger asChild>
+                                    <Button
+                                        className="rounded-xl rounded-l-none"
+                                        onClick={handleNextSnapshot}
+                                        disabled={isDisplay || leftArrowClickCount == 0}
+                                    >
+                                        <ArrowRightToLine size={16} />
+                                    </Button>
+                                </TooltipTrigger>
+                                <TooltipContent>
+                                    <p>View Next Data Window</p>
+                                </TooltipContent>
+                            </Tooltip>
+                        </TooltipProvider>
                     </div>
                 )}
 
@@ -1861,7 +1922,7 @@ const Connection: React.FC<ConnectionProps> = ({
                                         <FileArchive size={16} />
                                     </Button>
                                 </PopoverTrigger>
-                                <PopoverContent className="p-4 text-base shadow-lg rounded-xl w-full">
+                                <PopoverContent className="p-4 text-base shadow-lg rounded-xl w-full mx-4 mb-2">
                                     <div className="space-y-4">
                                         {/* List each file with download and delete actions */}
                                         {datasets.length > 0 ? (
@@ -1928,7 +1989,7 @@ const Connection: React.FC<ConnectionProps> = ({
                         <PopoverTrigger asChild>
                             <Button
                                 className="flex items-center gap-1 justify-center px-3 py-2 select-none min-w-12 whitespace-nowrap rounded-xl"
-                                disabled={isPauseState}
+                                disabled={isPauseState || isRecordingRef.current}
                             >
                                 <FilterIcon size={17} className="min-[1230px]:hidden" />
                                 <span className="hidden min-[1230px]:inline">Filter</span>
@@ -2175,7 +2236,7 @@ const Connection: React.FC<ConnectionProps> = ({
                         <PopoverTrigger asChild>
                             <Button
                                 className="flex items-center gap-1 justify-center px-3 py-2 select-none min-w-12 whitespace-nowrap rounded-xl"
-                                disabled={!isDisplay}
+                                disabled={!isDisplay || isRecordingRef.current}
                             >
                                 <FilterIcon size={17} className="min-[1230px]:hidden" />
                                 <span className="hidden min-[1230px]:inline">Filter</span>
@@ -2347,7 +2408,7 @@ const Connection: React.FC<ConnectionProps> = ({
                                     <PopoverTrigger asChild>
                                         <Button
                                             className="flex items-center justify-center select-none whitespace-nowrap rounded-lg"
-                                            disabled={isfftLoading || isPauseState}
+                                            disabled={isfftLoading || isPauseState || isRecordingRef.current}
                                         >
                                             <Settings size={16} />
                                         </Button>
@@ -2411,7 +2472,7 @@ const Connection: React.FC<ConnectionProps> = ({
                                 <Settings size={16} />
                             </Button>
                         </PopoverTrigger>
-                        <PopoverContent className="w-[30rem] p-4 rounded-md shadow-md text-sm">
+                        <PopoverContent className="w-[30rem] p-4 rounded-md shadow-md text-sm mx-4 mb-2">
                             <TooltipProvider>
                                 <div className={`space-y-6 ${!isDisplay ? "flex justify-center" : ""}`}>
                                     {/* Channel Selection */}

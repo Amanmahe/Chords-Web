@@ -49,7 +49,8 @@ const FFT = forwardRef(
         sampleupdateref.current = currentSamplingRate / 10;
         const canvasRef = useRef<HTMLCanvasElement>(null);
         const containerRef = useRef<HTMLDivElement>(null);
-        const { theme } = useTheme();
+        // Use resolvedTheme, not theme: see the comment in Canvas.tsx.
+        const { resolvedTheme: theme } = useTheme();
         const maxFreq = 60;
         const [betaPower, setBetaPower] = useState<number>(0);
         const betaPowerRef = useRef<number>(0);
