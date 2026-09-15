@@ -30,17 +30,28 @@ type ChannelEntry = {
     lines: [WebglLine, WebglLine];
 };
 
-// One bar in the band-power chart. `scale` animates 0->1 when a channel is
-// newly selected (the bar grows/fades in) and 1->0 when deselected (the bar
-// shrinks/fades out before being dropped), so toggling a channel never snaps
-// the other bars straight to their new width/position.
+// One bar in the band-power chart. `scale` is always 1 for a currently
+// selected channel; entries for deselected channels are dropped immediately
+// rather than kept around, so drawGraph never sizes/positions bars around a
+// leftover zero-width slot.
 type BarEntry = {
     channelNumber: number;
     value: number;
     scale: number;
 };
 
-const BAR_EASE_FACTOR = 0.18;
+// Canvas' textBaseline "middle" centers on the font's full ascent/descent
+// box, which reserves room for descenders (g, y, ...) that labels like
+// "CH1" or "12.34" never use — so "middle"-baselined all-caps/digit text
+// renders visibly above the true center of its box. This centers on the
+// text's own actual rendered glyph bounds instead.
+function fillTextVCentered(ctx: CanvasRenderingContext2D, text: string, cx: number, cy: number) {
+    const metrics = ctx.measureText(text);
+    const ascent = metrics.actualBoundingBoxAscent || 0;
+    const descent = metrics.actualBoundingBoxDescent || 0;
+    ctx.textBaseline = "alphabetic";
+    ctx.fillText(text, cx, cy + (ascent - descent) / 2);
+}
 
 function disposeChannelEntry(entry: ChannelEntry) {
     const gl = entry.canvas.getContext("webgl");
@@ -125,7 +136,6 @@ const RepForge = forwardRef(
         const canvasRef = useRef<HTMLCanvasElement>(null);
         const containerRef = useRef<HTMLDivElement>(null);
         const latestDataRef = useRef<number[] | null>(null);
-        const animationRef = useRef<number>(0);
         const prevBandPowerData = useRef<number[]>([]);
         const [bandPowerData, setBandPowerData] = useState<number[]>([]);
         const powerBuffer = useRef<number[][]>([]);
@@ -487,7 +497,14 @@ const RepForge = forwardRef(
                 // while a bar is still mostly grown-in.
                 const equivalentWidthAtMaxChannels = W * (MAX_REPFORGE_CHANNELS / decorativeCount);
                 const scale = equivalentWidthAtMaxChannels / 800;
-                const padding = 5 * scale;
+                // Since W itself scales linearly with channel count (see
+                // rightPanelWidthPercent below), padding must be exactly
+                // half of the multi-bar gap for unitBarWidth's derivation
+                // to be perfectly independent of N — any other ratio leaves
+                // a leftover term that shrinks/grows with N, which shows up
+                // as every existing bar's edge visibly drifting by a couple
+                // px whenever a channel is added/removed.
+                const padding = 4 * scale;
 
                 const availableWidth = W - (padding * 2);
                 // Bars always divide up the full available width evenly: one
@@ -543,7 +560,15 @@ const RepForge = forwardRef(
                     const barActW = Math.max(unitBarWidth * entry.scale, 0.01);
                     const x0 = cursorX;
                     cursorX += barActW + barSpace;
-                    return { entry, x0, barActW };
+                    // Snap each bar's edges to whole device pixels,
+                    // independently from its own (unrounded) x0/x1 rather
+                    // than by accumulating already-rounded widths — so a
+                    // persisting bar's edge lands on the same device pixel
+                    // every time, instead of anti-aliasing a hair
+                    // differently frame to frame off a sub-pixel boundary.
+                    const snappedX0 = Math.round(x0 * dpr) / dpr;
+                    const snappedX1 = Math.round((x0 + barActW) * dpr) / dpr;
+                    return { entry, x0: snappedX0, barActW: snappedX1 - snappedX0 };
                 });
 
                 layout.forEach(({ entry, x0, barActW }, i) => {
@@ -602,7 +627,7 @@ const RepForge = forwardRef(
                     const textWidth = ctx.measureText(labelText).width;
                     const pillPaddingX = 8 * scale;
                     const pillWidth = Math.min(textWidth + pillPaddingX * 2, barActW - 4 * scale);
-                    const pillMarginTop = 6 * scale;
+                    const pillMarginTop = 14 * scale;
                     const pillX = x0 + barActW / 2 - pillWidth / 2;
                     const pillY = barY + pillMarginTop;
 
@@ -616,8 +641,7 @@ const RepForge = forwardRef(
 
                     ctx.fillStyle = axisColor;
                     ctx.textAlign = "center";
-                    ctx.textBaseline = "middle";
-                    ctx.fillText(labelText, pillX + pillWidth / 2, pillY + pillHeight / 2);
+                    fillTextVCentered(ctx, labelText, pillX + pillWidth / 2, pillY + pillHeight / 2);
                     ctx.globalAlpha = 1;
                 });
 
@@ -639,8 +663,7 @@ const RepForge = forwardRef(
                     ctx.fillStyle = axisColor;
                     ctx.font = `bold ${fontLabel}px Arial`;
                     ctx.textAlign = "center";
-                    ctx.textBaseline = "middle";
-                    ctx.fillText(entry.value.toFixed(2), labelX, labelY + labelBoxH / 2);
+                    fillTextVCentered(ctx, entry.value.toFixed(2), labelX, labelY + labelBoxH / 2);
                     ctx.globalAlpha = 1;
                 });
             },
@@ -648,71 +671,56 @@ const RepForge = forwardRef(
         );
 
         const animateGraph = useCallback(() => {
-            const selectedSet = new Set(selectedChannels);
             const valueByChannel = new Map<number, number>(
                 selectedChannels.map((channelNumber, i) => [channelNumber, bandPowerData[i] ?? 0])
             );
 
-            // Reconcile the animated bar list against the current selection:
-            // entries for channels still selected are kept (so their scale
-            // keeps easing rather than resetting); entries for deselected
-            // channels are kept too, but eased toward scale 0 and value 0,
-            // and only dropped once fully shrunk — that's what makes a
-            // removed channel's bar shrink/fade out instead of vanishing
-            // instantly and snapping the rest of the layout.
+            // Reconcile the bar list against the current selection: a
+            // deselected channel's entry is dropped immediately (no
+            // animation to wait for), so drawGraph never lays bars out
+            // around a leftover zero-width slot that shifts everything
+            // after it for a frame.
             const prevEntries = barEntriesRef.current;
-            const nextEntries: BarEntry[] = [];
-            prevEntries.forEach((entry) => {
-                if (selectedSet.has(entry.channelNumber) || entry.scale > 0.01) {
-                    nextEntries.push(entry);
-                }
-            });
-            selectedChannels.forEach((channelNumber) => {
-                if (!nextEntries.some((e) => e.channelNumber === channelNumber)) {
-                    nextEntries.push({ channelNumber, value: 0, scale: 0 });
-                }
+            const nextEntries: BarEntry[] = selectedChannels.map((channelNumber) => {
+                const existing = prevEntries.find((e) => e.channelNumber === channelNumber);
+                return existing ?? { channelNumber, value: 0, scale: 1 };
             });
 
             nextEntries.forEach((entry) => {
-                const isSelected = selectedSet.has(entry.channelNumber);
-                const targetScale = isSelected ? 1 : 0;
-                entry.scale += (targetScale - entry.scale) * BAR_EASE_FACTOR;
-                if (Math.abs(targetScale - entry.scale) < 0.002) entry.scale = targetScale;
-
-                const targetValue = isSelected ? (valueByChannel.get(entry.channelNumber) ?? 0) : 0;
-                entry.value += (targetValue - entry.value) * BAR_EASE_FACTOR;
+                entry.scale = 1;
+                entry.value = valueByChannel.get(entry.channelNumber) ?? 0;
             });
 
             barEntriesRef.current = nextEntries;
-
-            const targetDecorativeCount = Math.max(selectedChannels.length, 1);
-            decorativeCountRef.current += (targetDecorativeCount - decorativeCountRef.current) * BAR_EASE_FACTOR;
-            if (Math.abs(targetDecorativeCount - decorativeCountRef.current) < 0.01) {
-                decorativeCountRef.current = targetDecorativeCount;
-            }
+            decorativeCountRef.current = Math.max(selectedChannels.length, 1);
 
             drawGraph(nextEntries, decorativeCountRef.current);
             latestDataRef.current = nextEntries.map((e) => e.value);
-
-            animationRef.current = requestAnimationFrame(animateGraph);
         }, [bandPowerData, selectedChannels, drawGraph]);
 
+        // Kept up to date every render so the loop below always calls the
+        // freshest animateGraph. Without this indirection, restarting the
+        // rAF chain via a `[animateGraph]`-dependent effect races the old
+        // closure's own self-scheduled frame (it keeps firing — with stale
+        // selectedChannels/bandPowerData but the already-resized live DOM
+        // width — until the effect's cleanup wins the race), which is what
+        // made the last bar's edge visibly jump for a frame when a channel
+        // was toggled. Starting the loop once and never restarting it
+        // removes that race entirely; a resize is already picked up next
+        // frame since the loop redraws continuously, so no separate
+        // ResizeObserver-driven restart is needed either.
+        const animateGraphRef = useRef(animateGraph);
+        animateGraphRef.current = animateGraph;
+
         useEffect(() => {
-            animationRef.current = requestAnimationFrame(animateGraph);
-            return () => {
-                if (animationRef.current) cancelAnimationFrame(animationRef.current);
+            let frameId: number;
+            const loop = () => {
+                animateGraphRef.current();
+                frameId = requestAnimationFrame(loop);
             };
-        }, [animateGraph]);
-
-        useEffect(() => {
-            const resizeObserver = new ResizeObserver(() => {
-                if (animationRef.current) cancelAnimationFrame(animationRef.current);
-                animationRef.current = requestAnimationFrame(animateGraph);
-            });
-
-            if (containerRef.current) resizeObserver.observe(containerRef.current);
-            return () => resizeObserver.disconnect();
-        }, [animateGraph]);
+            frameId = requestAnimationFrame(loop);
+            return () => cancelAnimationFrame(frameId);
+        }, []);
 
         // Buffers the raw samples (and their live-computed envelope) into the
         // currently active snapshot slot, flipping to the next slot once it's
