@@ -43,10 +43,6 @@ Chords is an application based on Web Serial connection, you can connect [Compat
 - [WebGl Plot](https://webgl-plot.vercel.app/): Real time charting library.
 - [IndexedDB](https://developer.mozilla.org/en-US/docs/Web/API/IndexedDB_API) Browser-based database for storing recorded data.
 
-## Resources
-
-- [Vendors](src/components/vendors.ts) list for board name and there vendor id are taken from [Stackblitz](https://stackblitz.com/edit/typescript-web-serial?file=vendors.ts) created by [William Grasel](https://github.com/willgm)
-
 ## Icons Used
 - [Lucide React](https://lucide.dev/guide/packages/lucide-react)
 
