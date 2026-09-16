@@ -9,6 +9,7 @@ import { useRouter } from "next/navigation"; // Import useRouter
 import { getCustomColor, lightThemeColors } from './Colors';
 import {
     Cable,
+    Bluetooth,
     Circle,
     CircleStop,
     CircleX,
@@ -140,7 +141,6 @@ const Connection: React.FC<ConnectionProps> = ({
     const devicenameref = useRef<string>("");
     const [deviceReady, setDeviceReady] = useState(false);
     const samplingrateref = useRef<number>(0);
-    const [open, setOpen] = useState(false);
     const [isPauseState, setIsPauseState] = useState(false);
     // UI Themes & Modes
     // Use resolvedTheme, not theme: the app defaults to the "system" theme
@@ -1724,64 +1724,73 @@ const Connection: React.FC<ConnectionProps> = ({
 
             {/* Center-aligned buttons */}
             <div className="flex flex-wrap gap-3 items-center justify-center min-w-0 px-4">
-                {/* Connection button with tooltip */}
-                <TooltipProvider>
-                    <Tooltip>
-                        <TooltipTrigger asChild>
-                            <Popover open={open} onOpenChange={setOpen}>
-                                <PopoverTrigger asChild>
+                {/* Connection controls */}
+                {isDeviceConnected || isLoading || isfftLoading ? (
+                    <TooltipProvider>
+                        <Tooltip>
+                            <TooltipTrigger asChild>
+                                <Button
+                                    className="flex items-center gap-1 py-2 px-4 rounded-xl font-semibold"
+                                    onClick={() => (isDeviceConnected ? (isSerial ? disconnectDevice() : disconnect()) : undefined)}
+                                    disabled={isLoading || isfftLoading || isRecordingRef.current}
+                                >
+                                    {isLoading || isfftLoading ? (
+                                        <>
+                                            <Loader size={17} className="animate-spin min-[1230px]:hidden" />
+                                            <span className="hidden min-[1230px]:inline">Connecting...</span>
+                                        </>
+                                    ) : (
+                                        <>
+                                            <span className="hidden min-[1230px]:inline">Disconnect</span>
+                                            <CircleX size={17} className="min-[1230px]:hidden" />
+                                        </>
+                                    )}
+                                </Button>
+                            </TooltipTrigger>
+                            <TooltipContent>
+                                <p>Disconnect Device</p>
+                            </TooltipContent>
+                        </Tooltip>
+                    </TooltipProvider>
+                ) : (
+                    <div className="flex items-center h-10 rounded-xl overflow-hidden bg-primary text-primary-foreground font-semibold">
+                        <div className="hidden min-[1230px]:flex items-center h-full px-3 text-sm border-r border-primary-foreground/20">
+                            Connect
+                        </div>
+                        <TooltipProvider>
+                            <Tooltip>
+                                <TooltipTrigger asChild>
                                     <Button
-                                        className="flex items-center gap-1 py-2 px-4 rounded-xl font-semibold"
-                                        onClick={() => (isDeviceConnected ? (isSerial ? disconnectDevice() : disconnect()) : undefined)}
-                                        disabled={isLoading || isfftLoading || isRecordingRef.current}
+                                        className="h-full rounded-none border-r border-primary-foreground/20 gap-1 px-3 bg-primary hover:bg-primary/80"
+                                        onClick={connectBLE}
+                                        disabled={isRecordingRef.current}
                                     >
-                                        {isLoading || isfftLoading ? (
-                                            <>
-                                                <Loader size={17} className="animate-spin min-[1230px]:hidden" />
-                                                <span className="hidden min-[1230px]:inline">Connecting...</span>
-                                            </>
-                                        ) : isDeviceConnected ? (
-                                            <>
-                                                <span className="hidden min-[1230px]:inline">Disconnect</span>
-                                                <CircleX size={17} className="min-[1230px]:hidden" />
-                                            </>
-                                        ) : (
-                                            <>
-                                                <span className="hidden min-[1230px]:inline">Connect</span>
-                                                <Cable size={17} className="min-[1230px]:hidden" />
-                                            </>
-                                        )}
+                                        <span className="hidden min-[1230px]:inline text-blue-500">BLE</span> <Bluetooth size={17} className="text-blue-500" />
                                     </Button>
-                                </PopoverTrigger>
-                                {!isDeviceConnected && (
-                                    <PopoverContent className="w-40 p-3 space-y-2 mx-4 mb-2">
-                                        <Button
-                                            className="w-full"
-                                            onClick={() => {
-                                                setOpen(false);
-                                                connectToDevice();
-                                            }}
-                                        >
-                                            Serial
-                                        </Button>
-                                        <Button
-                                            className="w-full"
-                                            onClick={() => {
-                                                setOpen(false);
-                                                connectBLE();
-                                            }}
-                                        >
-                                            Bluetooth
-                                        </Button>
-                                    </PopoverContent>
-                                )}
-                            </Popover>
-                        </TooltipTrigger>
-                        <TooltipContent>
-                            <p>{isDeviceConnected ? "Disconnect Device" : "Connect Device"}</p>
-                        </TooltipContent>
-                    </Tooltip>
-                </TooltipProvider>
+                                </TooltipTrigger>
+                                <TooltipContent>
+                                    <p>Connect via Bluetooth</p>
+                                </TooltipContent>
+                            </Tooltip>
+                        </TooltipProvider>
+                        <TooltipProvider>
+                            <Tooltip>
+                                <TooltipTrigger asChild>
+                                    <Button
+                                        className="h-full rounded-none gap-1 px-3 bg-primary hover:bg-primary/80"
+                                        onClick={connectToDevice}
+                                        disabled={isRecordingRef.current}
+                                    >
+                                        <span className="hidden min-[1230px]:inline">Serial</span> <Cable size={17} />
+                                    </Button>
+                                </TooltipTrigger>
+                                <TooltipContent>
+                                    <p>Connect via Serial</p>
+                                </TooltipContent>
+                            </Tooltip>
+                        </TooltipProvider>
+                    </div>
+                )}
 
                 {!isDeviceConnected && (
                     <Button
