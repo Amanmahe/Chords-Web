@@ -1,4 +1,4 @@
-![Chords Default](public/assets/dark/HeroSignalsClean.png)
+![Chords Default](public/assets/dark/chords.png)
 
 
 Chords is an application based on Web Serial connection, you can connect [Compatible Boards](https://github.com/upsidedownlabs/Chords-Arduino-Firmware) after uploading the ArduinoFirmware.ino code to it, you'll recieve data signals from the board which can be visualized on web using Chords. Users can visualize ECG and EMG signals.
