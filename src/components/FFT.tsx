@@ -461,7 +461,7 @@ const FFT = forwardRef(
             if (!pauseRef.current) {
                 updateSnapshot(currentSnapshot);
             } else {
-                wglPlotsref.current[0].update();
+                wglPlotsref.current[0]?.update();
                 requestAnimationFrame(animate);
             }
         }, [wglPlotsref, Zoom, pauseRef.current, currentSnapshot, updateSnapshot]);

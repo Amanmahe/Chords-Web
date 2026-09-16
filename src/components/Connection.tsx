@@ -353,7 +353,7 @@ const Connection: React.FC<ConnectionProps> = ({
             // RESET functionality
             const savedPorts = JSON.parse(localStorage.getItem('savedDevices') || '[]');
             const portInfo = portRef.current?.getInfo();
-            let initialSelectedChannelsRefs: number[] = []; // Default to channel 1 if no saved channels are found
+            let initialSelectedChannelsRefs: number[] = [1]; // Default to channel 1 if no saved channels are found
 
             if (portInfo) {
 
@@ -366,7 +366,7 @@ const Connection: React.FC<ConnectionProps> = ({
                 if (deviceIndex !== -1) {
                     // Get the saved channels for the device
                     const savedChannels = savedPorts[deviceIndex].selectedChannels;
-                    initialSelectedChannelsRefs = savedChannels.length > 0 ? savedChannels : [1]; // Load saved channels or default to [1]
+                    initialSelectedChannelsRefs = savedChannels?.length > 0 ? savedChannels : [1]; // Load saved channels or default to [1]
                 }
             }
 

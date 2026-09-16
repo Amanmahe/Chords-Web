@@ -113,6 +113,11 @@ const RepForge = forwardRef(
         const envelopeFilters = useRef<EnvelopeFilter[]>([]);
         const selectedChannelsRef = useRef<number[]>(selectedChannels);
         const previousCounterRef = useRef<number | null>(null);
+        // Latest Zoom value for use inside callbacks that shouldn't be
+        // recreated (and shouldn't trigger a full rebuild) on every zoom tick —
+        // the effect below keeps existing plots' gScaleY in sync separately.
+        const zoomRef = useRef(Zoom);
+        zoomRef.current = Zoom;
         // Canvas/WebGL objects, keyed by channel number, that persist across
         // channel-selection changes (see reconcileChannels below).
         const channelEntriesRef = useRef<Map<number, ChannelEntry>>(new Map());
@@ -213,7 +218,7 @@ const RepForge = forwardRef(
             canvasWrapper.appendChild(canvas);
 
             const wglp = new WebglPlot(canvas);
-            wglp.gScaleY = Zoom;
+            wglp.gScaleY = zoomRef.current;
 
             const color1 = new ColorRGBA(1, 0, 0, 1); // Raw EMG
             const color2 = new ColorRGBA(0, 1, 1, 1); // Envelope
@@ -227,7 +232,7 @@ const RepForge = forwardRef(
             wglp.addLine(line2);
 
             return { wrapper: canvasWrapper, canvas, wglp, lines: [line1, line2] };
-        }, [Zoom]);
+        }, []);
 
         // Full teardown + rebuild of the grid and every channel's canvas.
         // Only needed when the theme (grid colors) or the window size
