@@ -1761,11 +1761,11 @@ const Connection: React.FC<ConnectionProps> = ({
                             <Tooltip>
                                 <TooltipTrigger asChild>
                                     <Button
-                                        className="h-full rounded-none border-r border-primary-foreground/20 gap-1 px-3 bg-primary hover:bg-primary/80"
+                                        className="h-full rounded-none border-r border-primary-foreground/20 gap-1 hover:text-primary-foreground px-3 bg-[#0A3B8C] text-white"
                                         onClick={connectBLE}
                                         disabled={isRecordingRef.current}
                                     >
-                                        <span className="hidden min-[1230px]:inline text-blue-500">BLE</span> <Bluetooth size={17} className="text-blue-500" />
+                                        <span className="hidden min-[1230px]:inline ">BLE</span> <Bluetooth size={17}/>
                                     </Button>
                                 </TooltipTrigger>
                                 <TooltipContent>
@@ -1777,7 +1777,7 @@ const Connection: React.FC<ConnectionProps> = ({
                             <Tooltip>
                                 <TooltipTrigger asChild>
                                     <Button
-                                        className="h-full rounded-none gap-1 px-3 bg-primary hover:bg-primary/80"
+                                        className="h-full rounded-none gap-1 px-3 bg-[#9E4586] hover:bg-primary/80 hover:text-primary-foreground text-white"
                                         onClick={connectToDevice}
                                         disabled={isRecordingRef.current}
                                     >
