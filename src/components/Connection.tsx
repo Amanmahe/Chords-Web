@@ -1753,8 +1753,8 @@ const Connection: React.FC<ConnectionProps> = ({
                         </Tooltip>
                     </TooltipProvider>
                 ) : (
-                    <div className="flex items-center h-10 rounded-xl overflow-hidden bg-primary text-primary-foreground font-semibold">
-                        <div className="hidden min-[1230px]:flex items-center h-full px-3 text-sm border-r border-primary-foreground/20">
+                    <div className="flex items-center h-10 rounded-xl overflow-hidden text-primary-foreground font-semibold">
+                        <div className="hidden min-[1230px]:flex items-center h-full px-3 text-sm border-r bg-primary border-primary-foreground/20">
                             Connect
                         </div>
                         <TooltipProvider>
