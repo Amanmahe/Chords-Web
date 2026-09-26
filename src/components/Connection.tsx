@@ -41,6 +41,7 @@ import {
 } from "lucide-react";
 
 import { BoardsList } from "./boards";
+import FirmwareUpdateDialog from "./FirmwareUpdateDialog";
 import { toast } from "sonner";
 import { saveAs } from "file-saver";
 import {
@@ -122,6 +123,11 @@ const Connection: React.FC<ConnectionProps> = ({
     const isDeviceConnectedRef = useRef<boolean>(false); // Ref to track if the device is connected
     const isRecordingRef = useRef<boolean>(false); // Ref to track if the device is recording
     const isOldfirmwareRef = useRef<boolean>(false); // Ref to track if the device has old firmware
+    // Firmware update dialog (serial boards whose firmware doesn't answer WHORU)
+    const [firmwareDialogOpen, setFirmwareDialogOpen] = useState(false);
+    const [firmwarePid, setFirmwarePid] = useState<number | null>(null);
+    const [firmwareDialogKey, setFirmwareDialogKey] = useState(0);
+    const firmwarePortRef = useRef<SerialPort | null>(null);
 
     // UI States for Popovers and Buttons
     const [isEndTimePopoverOpen, setIsEndTimePopoverOpen] = useState(false);
@@ -653,7 +659,7 @@ const Connection: React.FC<ConnectionProps> = ({
 
 
     const formatPortInfo = useCallback(
-        (info: SerialPortInfo, deviceName: string, fieldPid?: number) => {
+        (info: SerialPortInfo, deviceName: string, board?: (typeof BoardsList)[number]) => {
             if (!info?.usbVendorId) {
                 return {
                     formattedInfo: "Port with no info",
@@ -664,13 +670,6 @@ const Connection: React.FC<ConnectionProps> = ({
                     usbProductId: null, // Add usbProductId to the return value
                 };
             }
-
-            // Find the board matching the device name and optionally fieldPid
-            const board = BoardsList.find(
-                (b) =>
-                    b.chords_id.toLowerCase() === deviceName.toLowerCase() &&
-                    (!fieldPid || b.field_pid === fieldPid)
-            );
 
             if (board) {
                 const {
@@ -732,17 +731,19 @@ const Connection: React.FC<ConnectionProps> = ({
         deviceName?: string; // Add deviceName as an optional property
     };
 
-    const connectToDevice = async () => {
+    // `knownPort`: a port this site already has permission for (e.g. the board
+    // that was just flashed); used directly, without the port picker.
+    const connectToDevice = async (knownPort?: SerialPort) => {
         try {
             if (portRef.current && portRef.current.readable) {
                 await disconnectDevice();
             }
 
             const savedPorts = JSON.parse(localStorage.getItem('savedDevices') || '[]');
-            let port = null;
+            let port: SerialPort | null = knownPort ?? null;
             const ports = await navigator.serial.getPorts();
 
-            if (savedPorts.length > 0) {
+            if (!port && savedPorts.length > 0) {
                 port = ports.find((p) => {
                     const info = p.getInfo();
                     return savedPorts.some(
@@ -779,8 +780,10 @@ const Connection: React.FC<ConnectionProps> = ({
                     const savedChannels = savedPorts[deviceIndex].selectedChannels;
                 }
 
-                baudRate = savedDevice?.baudRate || 230400;
-                serialTimeout = savedDevice?.serialTimeout || 2000;
+                // Not saved yet (e.g. a just-flashed board): use its board config.
+                const pidBoard = BoardsList.find((b) => b.field_pid === info.usbProductId);
+                baudRate = savedDevice?.baudRate || pidBoard?.baud_Rate || 230400;
+                serialTimeout = savedDevice?.serialTimeout || pidBoard?.serial_timeout || 2000;
 
                 await port.open({ baudRate });
             }
@@ -802,23 +805,76 @@ const Connection: React.FC<ConnectionProps> = ({
                             toast.error("Could not communicate with the device. Please try reconnecting.");
                         });
                     }, serialTimeout);
+                    // Wait for the WHORU reply, but don't hang forever: old
+                    // firmware never answers it.
                     let buffer = "";
-                    while (true) {
-                        const { value, done } = await reader.read();
-                        if (done) break;
-                        if (value) {
-                            buffer += new TextDecoder().decode(value);
-                            if (buffer.includes("\n")) break;
+                    let whoruTimedOut = false;
+                    const whoruTimer = setTimeout(() => {
+                        whoruTimedOut = true;
+                        reader.cancel().catch(() => { });
+                    }, serialTimeout + 3000);
+                    try {
+                        while (true) {
+                            const { value, done } = await reader.read();
+                            if (done) break;
+                            if (value) {
+                                buffer += new TextDecoder().decode(value);
+                                if (buffer.includes("\n")) break;
+                            }
                         }
+                    } finally {
+                        clearTimeout(whoruTimer);
                     }
-                    const response = buffer.trim().split("\n").pop();
-                    const extractedName = response?.match(/[A-Za-z0-9\-_\s]+$/)?.[0]?.trim() || "Unknown Device";
-                    devicenameref.current = extractedName;
+                    if (whoruTimedOut) {
+                        // The cancelled reader is dead; grab a fresh one for streaming.
+                        reader.releaseLock();
+                        readerRef.current = port.readable.getReader();
+                    }
+                    const response = whoruTimedOut ? "" : buffer.trim().split("\n").pop();
+                    const whoruName = response?.match(/[A-Za-z0-9\-_\s]+$/)?.[0]?.trim() || "";
                     const currentPortInfo = port.getInfo();
                     const usbProductId = currentPortInfo.usbProductId ?? 0;
 
+                    // WHORU is the source of truth. The USB PID is only a fallback
+                    // for firmware that doesn't answer WHORU correctly.
+                    const whoruBoard = whoruName
+                        ? BoardsList.find((b) => b.chords_id.toLowerCase() === whoruName.toLowerCase())
+                        : undefined;
+                    const pidBoard = BoardsList.find((b) => b.field_pid === usbProductId);
+                    const board = whoruBoard ?? pidBoard;
+                    const isOutdatedFirmware = !whoruBoard && !!pidBoard;
+
+                    if (isOutdatedFirmware) {
+                        // No (valid) firmware: don't start streaming or open the
+                        // visualiser. Release the port for the flasher and go
+                        // straight to the update popup.
+                        try { await readerRef.current?.cancel(); } catch { }
+                        readerRef.current?.releaseLock();
+                        readerRef.current = null;
+                        writerRef.current?.releaseLock();
+                        writerRef.current = null;
+                        await port.close().catch(() => { });
+                        firmwarePortRef.current = port;
+                        setFirmwarePid(usbProductId);
+                        setFirmwareDialogKey((k) => k + 1);
+                        setFirmwareDialogOpen(true);
+                        setIsLoading(false);
+                        return;
+                    }
+
+                    const extractedName = whoruBoard?.chords_id ?? pidBoard?.chords_id ?? (whoruName || "Unknown Device");
+                    devicenameref.current = extractedName;
+
+                    if (whoruBoard && pidBoard && !BoardsList.some((b) => b.chords_id === whoruBoard.chords_id && b.field_pid === usbProductId)) {
+                        console.warn(`WHORU reported ${whoruBoard.chords_id} but USB PID ${usbProductId} doesn't match it; using WHORU.`);
+                    }
+
+                    // Match on name AND USB ID: boards can share a name
+                    // (UNO R4 Minima and WiFi are both "UNO-R4").
                     const existingDeviceIndex = savedPorts.findIndex(
-                        (saved: SavedDevice) => saved.deviceName === extractedName
+                        (saved: SavedDevice) =>
+                            saved.deviceName === extractedName &&
+                            saved.usbProductId === (currentPortInfo.usbProductId ?? 0)
                     );
 
                     if (existingDeviceIndex !== -1) {
@@ -838,7 +894,7 @@ const Connection: React.FC<ConnectionProps> = ({
 
                     localStorage.setItem('savedDevices', JSON.stringify(savedPorts));
 
-                    const { formattedInfo, adcResolution, channelCount, baudRate: extractedBaudRate, serialTimeout: extractedSerialTimeout } = formatPortInfo(currentPortInfo, extractedName, usbProductId);
+                    const { formattedInfo, adcResolution, channelCount, baudRate: extractedBaudRate, serialTimeout: extractedSerialTimeout } = formatPortInfo(currentPortInfo, extractedName, board);
 
                     // Update maxCanvasElementCountRef when connecting a new device
                     if (channelCount) {
@@ -935,6 +991,29 @@ const Connection: React.FC<ConnectionProps> = ({
         });
     };
 
+
+    // After a firmware flash the board reboots (ESP32 USB boards drop off USB
+    // and come back), so wait for its already-permitted port to reappear and
+    // then connect without asking the user.
+    const reconnectAfterFlash = async () => {
+        const pid = firmwarePid;
+        await new Promise((r) => setTimeout(r, 1500));
+        const deadline = Date.now() + 15000;
+        while (Date.now() < deadline) {
+            const ports = await navigator.serial.getPorts();
+            const flashedPort = ports.find((p) => pid == null || p.getInfo().usbProductId === pid);
+            if (flashedPort) {
+                // Give the new firmware a moment to boot before sending WHORU.
+                await new Promise((r) => setTimeout(r, 1000));
+                await connectToDevice(flashedPort);
+                return;
+            }
+            await new Promise((r) => setTimeout(r, 500));
+        }
+        toast.error("Couldn't reconnect after the update", {
+            description: "Press RESET on the board, then connect again.",
+        });
+    };
 
     const disconnectDevice = async (): Promise<void> => {
         try {
@@ -1864,7 +1943,7 @@ const Connection: React.FC<ConnectionProps> = ({
                                 <TooltipTrigger asChild>
                                     <Button
                                         className="h-full rounded-none gap-1 px-3 bg-[#9E4586] hover:bg-primary/80 hover:text-primary-foreground text-white"
-                                        onClick={connectToDevice}
+                                        onClick={() => connectToDevice()}
                                         disabled={isRecordingRef.current}
                                     >
                                         <span className="hidden min-[1230px]:inline">Serial</span> <Cable size={17} />
@@ -2722,6 +2801,19 @@ const Connection: React.FC<ConnectionProps> = ({
                 )}
             </div>
 
+            <FirmwareUpdateDialog
+                key={firmwareDialogKey}
+                open={firmwareDialogOpen}
+                onOpenChange={setFirmwareDialogOpen}
+                usbProductId={firmwarePid}
+                beforeFlash={async () => {
+                    // The flasher needs the port to itself.
+                    const flashPort = portRef.current ?? firmwarePortRef.current;
+                    if (portRef.current) await disconnectDevice();
+                    return flashPort;
+                }}
+                onFlashed={() => reconnectAfterFlash()}
+            />
         </div>
     );
 };
