@@ -38,6 +38,23 @@ interface FirmwareUpdateDialogProps {
     onFlashed: () => void;
 }
 
+/** Revokes this site's access to every remembered USB device matching `filters`. */
+async function forgetBootDevices(filters: USBDeviceFilter[]) {
+    if (!("usb" in navigator)) return;
+    const devices = await navigator.usb.getDevices();
+    await Promise.all(
+        devices
+            .filter((d) =>
+                filters.some(
+                    (f) =>
+                        (f.vendorId === undefined || f.vendorId === d.vendorId) &&
+                        (f.productId === undefined || f.productId === d.productId)
+                )
+            )
+            .map((d) => d.forget().catch(() => { }))
+    );
+}
+
 export default function FirmwareUpdateDialog({
     open,
     onOpenChange,
@@ -58,7 +75,24 @@ export default function FirmwareUpdateDialog({
     const [skipTouch, setSkipTouch] = useState(false);
     const logRef = useRef<HTMLDivElement>(null);
     // Firmware downloaded by the last attempt, reused when Flash is pressed again.
-    const firmwareFileRef = useRef<{ key: string; file: File } | null>(null);
+    // Keyed by "<tag>/<asset>"; started as soon as the version is known (see
+    // the prefetch effect) so pressing Flash reaches the device picker without
+    // waiting on the network.
+    const firmwareFileRef = useRef<{ key: string; file: Promise<File> } | null>(null);
+    const getFirmwareFile = useCallback((tag: string, asset: string) => {
+        const key = `${tag}/${asset}`;
+        if (firmwareFileRef.current?.key !== key) {
+            const file = fetchFirmware(firmwareUrl(asset, tag)).then(
+                (bytes) => new File([bytes as BlobPart], asset)
+            );
+            // Don't keep a failed download: the next attempt retries it.
+            file.catch(() => {
+                if (firmwareFileRef.current?.file === file) firmwareFileRef.current = null;
+            });
+            firmwareFileRef.current = { key, file };
+        }
+        return firmwareFileRef.current.file;
+    }, []);
 
     const log = useCallback(
         (msg: string, kind: LogLine["kind"] = "info") => setLogs((l) => [...l.slice(-300), { msg, kind }]),
@@ -81,6 +115,12 @@ export default function FirmwareUpdateDialog({
     }, [logs]);
 
     const target = targets[selected];
+
+    // Download the firmware as soon as the version and board are known.
+    useEffect(() => {
+        if (!open || !target || (!latest && !latestError)) return;
+        getFirmwareFile(latest?.tag ?? "latest", target.asset).catch(() => { });
+    }, [open, target, latest, latestError, getFirmwareFile]);
     const busy = status === "flashing";
     const assetMissing =
         !!target && Array.isArray(latest?.assets) && !latest.assets.some((a) => a.name === target.asset);
@@ -115,19 +155,31 @@ export default function FirmwareUpdateDialog({
                 setPreferredSerialPort(port);
             }
 
-            // Download once and keep it: the browser only opens the USB picker
-            // shortly after a click, so a retry must not wait on the network.
-            const key = `${tag}/${target.asset}`;
-            if (firmwareFileRef.current?.key !== key) {
-                log(`Downloading ${target.asset}…`);
-                const bytes = await fetchFirmware(device.firmware[0].url);
-                firmwareFileRef.current = { key, file: new File([bytes as BlobPart], target.asset) };
+            // Usually already downloaded by the prefetch: the browser only opens
+            // the USB picker shortly after a click, so this mustn't wait on the network.
+            const firmwareFile = await getFirmwareFile(tag, target.asset);
+
+            // STM32: forget every boot device remembered from earlier, so the
+            // picker only offers what's plugged in now and no old entry is reused.
+            const isStm32 = device.protocol === "dfuse" && !device.touch1200;
+            if (isStm32) {
+                // Its normal (serial) port disappears in boot mode; if it's still
+                // there, the picker would have nothing real to offer.
+                const stillRunning = (await navigator.serial.getPorts()).some(
+                    (p) => p.getInfo().usbVendorId === 0x0483 && p.getInfo().usbProductId === usbProductId
+                );
+                if (stillRunning) {
+                    throw new Error(
+                        "The board is still in normal mode. Put it in boot mode (hold BOOT0, tap NRST, release BOOT0), then press Flash."
+                    );
+                }
+                await forgetBootDevices(device.usbFilters ?? []);
             }
 
             await flashDevice(
                 {
                     device,
-                    file: firmwareFileRef.current!.file,
+                    file: firmwareFile,
                     customAddress: device.firmware[0].address,
                     verify: true,
                     skipTouch: inBootloader,
@@ -139,6 +191,8 @@ export default function FirmwareUpdateDialog({
                 }
             );
             setProgress({ pct: 100, label: "Done" });
+            // ...and forget this one too once it has left boot mode.
+            if (isStm32) await forgetBootDevices(device.usbFilters ?? []);
             setStatus("done");
             log("Firmware updated successfully.", "ok");
             toast.success("Firmware updated", { description: `${target.label} is now on ${tag}. Reconnecting…` });
