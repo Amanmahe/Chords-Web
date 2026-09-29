@@ -70,6 +70,8 @@ export default function FirmwareUpdateDialog({
     const [latest, setLatest] = useState<LatestFirmware | null>(null);
     const [latestError, setLatestError] = useState<string | null>(null);
     const [status, setStatus] = useState<Status>("idle");
+    // Windows couldn't open the DFU device (needs WinUSB): offer the ways around it.
+    const [needsWinUsb, setNeedsWinUsb] = useState(false);
     const [progress, setProgress] = useState<{ pct: number; label: string } | null>(null);
     const [logs, setLogs] = useState<LogLine[]>([]);
     const logRef = useRef<HTMLDivElement>(null);
@@ -92,6 +94,22 @@ export default function FirmwareUpdateDialog({
         }
         return firmwareFileRef.current.file;
     }, []);
+
+    // Saves the firmware for flashing with another tool (e.g. STM32CubeProgrammer).
+    const downloadFirmwareFile = async () => {
+        if (!target) return;
+        try {
+            const file = await getFirmwareFile(latest?.tag ?? "latest", target.asset);
+            const url = URL.createObjectURL(file);
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = target.asset;
+            a.click();
+            setTimeout(() => URL.revokeObjectURL(url), 10000);
+        } catch (e) {
+            toast.error("Couldn't download the firmware", { description: e instanceof Error ? e.message : String(e) });
+        }
+    };
 
     const log = useCallback(
         (msg: string, kind: LogLine["kind"] = "info") => setLogs((l) => [...l.slice(-300), { msg, kind }]),
@@ -208,19 +226,10 @@ export default function FirmwareUpdateDialog({
                 const msg = e instanceof Error ? e.message : String(e);
                 const cancelled = /No port selected|No device selected|NotFoundError|aborted a request/i.test(msg);
                 setStatus("error");
+                if (/Windows is using a driver the browser can't open/.test(msg)) setNeedsWinUsb(true);
                 log(cancelled ? "Cancelled: no device was selected." : `Error: ${msg}`, "err");
                 if (cancelled) toast.message("Flashing cancelled: no device was selected.");
-                else
-                    toast.error("Firmware update failed", {
-                        description: msg,
-                        // Windows: the DFU device needs the WinUSB driver, installed once with Zadig.
-                        ...(/Zadig/.test(msg) && {
-                            action: {
-                                label: "Download Zadig",
-                                onClick: () => window.open("https://zadig.akeo.ie/", "_blank", "noopener,noreferrer"),
-                            },
-                        }),
-                    });
+                else toast.error("Firmware update failed", { description: msg });
             }
         } finally {
             setPreferredSerialPort(null);
@@ -319,6 +328,27 @@ export default function FirmwareUpdateDialog({
                                 </div>
                                 <div className="h-2 overflow-hidden rounded-full bg-muted">
                                     <div className="h-full bg-primary transition-all" style={{ width: `${progress.pct}%` }} />
+                                </div>
+                            </div>
+                        )}
+
+                        {needsWinUsb && target && (
+                            <div className="flex flex-col gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-sm">
+                                <p className="font-medium">Windows can&apos;t open this board from the browser</p>
+                                <p className="text-muted-foreground">
+                                    Flash it with ST&apos;s own tool instead: download the firmware, open it in
+                                    STM32CubeProgrammer, connect over <b>USB</b> with the board in boot mode and program it
+                                    at address <b>0x{(target.device.firmware[0]?.address ?? 0x08000000).toString(16).toUpperCase()}</b>.
+                                </p>
+                                <div className="flex flex-wrap gap-2">
+                                    <Button size="sm" onClick={downloadFirmwareFile}>
+                                        Download firmware (.bin)
+                                    </Button>
+                                    <Button size="sm" variant="outline" asChild>
+                                        <a href="https://www.st.com/en/development-tools/stm32cubeprog.html" target="_blank" rel="noopener noreferrer">
+                                            Get STM32CubeProgrammer
+                                        </a>
+                                    </Button>
                                 </div>
                             </div>
                         )}

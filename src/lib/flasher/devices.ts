@@ -22,7 +22,7 @@ const STM32_DFU_STEPS = [
   "Hold BOOT0, tap NRST (reset), then release BOOT0.",
   "The board now shows up as \"STM32 BOOTLOADER\" (0483:DF11).",
   "Press Flash and pick \"STM32 BOOTLOADER\". The browser remembers it for next time.",
-  "Windows only: if it isn't listed, install the WinUSB driver once with Zadig.",
+  "Windows: if flashing here isn't possible, download the firmware and flash it with STM32CubeProgrammer.",
 ];
 
 const AVR_STEPS = [

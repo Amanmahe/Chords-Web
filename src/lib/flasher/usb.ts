@@ -68,7 +68,7 @@ function accessDenied(filters: USBDeviceFilter[], label: string, cause: unknown)
   const f = filters[0] ?? {};
   const id = `${(f.vendorId ?? 0).toString(16).padStart(4, "0")}:${(f.productId ?? 0).toString(16).padStart(4, "0")}`;
   const hint = /Win/i.test(navigator.userAgent)
-    ? `Windows is using a driver the browser can't open. Run Zadig (Options → List All Devices), pick the ${label} (${id}), and install WinUSB.`
+    ? `Windows is using a driver the browser can't open for the ${label} (${id}).`
     : /Linux/i.test(navigator.userAgent)
       ? "Unplug and replug the board and try again. " +
         `If it still fails, add a udev rule: SUBSYSTEM=="usb", ATTRS{idVendor}=="${id.slice(0, 4)}", MODE="0666", then run "sudo udevadm control --reload && sudo udevadm trigger" and replug.`
