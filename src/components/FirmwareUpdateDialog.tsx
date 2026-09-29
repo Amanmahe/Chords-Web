@@ -210,7 +210,17 @@ export default function FirmwareUpdateDialog({
                 setStatus("error");
                 log(cancelled ? "Cancelled: no device was selected." : `Error: ${msg}`, "err");
                 if (cancelled) toast.message("Flashing cancelled: no device was selected.");
-                else toast.error("Firmware update failed", { description: msg });
+                else
+                    toast.error("Firmware update failed", {
+                        description: msg,
+                        // Windows: the DFU device needs the WinUSB driver, installed once with Zadig.
+                        ...(/Zadig/.test(msg) && {
+                            action: {
+                                label: "Download Zadig",
+                                onClick: () => window.open("https://zadig.akeo.ie/", "_blank", "noopener,noreferrer"),
+                            },
+                        }),
+                    });
             }
         } finally {
             setPreferredSerialPort(null);
