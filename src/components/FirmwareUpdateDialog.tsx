@@ -11,7 +11,6 @@ import {
 } from "./ui/dialog";
 import { Button } from "./ui/button";
 import { toast } from "@/lib/toast";
-import { isCh340, showCh340DriverToast } from "@/lib/ch340";
 import { NeedsUserGesture, flashDevice, needsApi, setPreferredSerialPort } from "@/lib/flasher";
 import { fetchFirmware } from "@/lib/flasher/firmware";
 import {
@@ -143,10 +142,8 @@ export default function FirmwareUpdateDialog({
         const inBootloader = status === "waiting";
         log(`Flashing ${target.asset} (${tag}) to ${target.label}`, "warn");
 
-        let flashPort: SerialPort | null = null; // for the CH340 driver hint on failure
         try {
             const port = await beforeFlash();
-            flashPort = port;
 
             // Serial-based flashing (and the 1200 baud reset) can reuse the port
             // Chords was just using instead of asking the user to pick it again.
@@ -213,13 +210,7 @@ export default function FirmwareUpdateDialog({
                 setStatus("error");
                 log(cancelled ? "Cancelled: no device was selected." : `Error: ${msg}`, "err");
                 if (cancelled) toast.message("Flashing cancelled: no device was selected.");
-                else {
-                    toast.error("Firmware update failed", { description: msg });
-                    // Clone boards: a missing CH340 driver is a common cause.
-                    if (isCh340(flashPort?.getInfo()) || target.device.id.includes("clone")) {
-                        showCh340DriverToast("Couldn't flash the board");
-                    }
-                }
+                else toast.error("Firmware update failed", { description: msg });
             }
         } finally {
             setPreferredSerialPort(null);

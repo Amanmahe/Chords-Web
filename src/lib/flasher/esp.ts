@@ -1,6 +1,19 @@
 import type { FlashJob } from "./types";
 import { pickSerialPort } from "./serial";
 
+/** esptool-js 0.5 takes flash data as a "binary string" (one char per byte). */
+function toBinaryString(data: Uint8Array) {
+  let out = "";
+  for (let i = 0; i < data.length; i += 0x8000) {
+    out += String.fromCharCode(...data.subarray(i, i + 0x8000));
+  }
+  return out;
+}
+
+// esptool-js is pinned to 0.5.7, the version the NPG Lite flasher uses. 0.7's
+// chip detection (GET_SECURITY_INFO) can fail on the ESP32-C6, and its fallback
+// closes, reopens and resets the port, after which the chip goes silent
+// ("Serial data stream stopped"). 0.5.7 just reads the chip's magic register.
 export async function flashEsp({ device, parts, options, cb }: FlashJob) {
   // esptool-js touches `window`, so load it only in the browser.
   const { ESPLoader, Transport } = await import("esptool-js");
@@ -36,7 +49,7 @@ export async function flashEsp({ device, parts, options, cb }: FlashJob) {
     const done: number[] = parts.map(() => 0);
 
     await loader.writeFlash({
-      fileArray: parts.map((p) => ({ data: p.data, address: p.address })),
+      fileArray: parts.map((p) => ({ data: toBinaryString(p.data), address: p.address })),
       flashMode: "keep",
       flashFreq: "keep",
       flashSize: "keep",
@@ -49,7 +62,7 @@ export async function flashEsp({ device, parts, options, cb }: FlashJob) {
       },
     });
 
-    // esptool-js 0.7's after("hard_reset") only drops RTS without raising it
+    // esptool-js's after("hard_reset") only drops RTS without raising it
     // first, so the chip never resets. Pulse EN ourselves: RTS high with DTR
     // low holds the chip in reset (works for USB-Serial-JTAG and the classic
     // DTR/RTS auto-reset circuit), then release both so it boots the new app

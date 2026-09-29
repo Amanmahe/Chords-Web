@@ -42,7 +42,6 @@ import {
 
 import { BoardsList } from "./boards";
 import FirmwareUpdateDialog from "./FirmwareUpdateDialog";
-import { isCh340, showCh340DriverToast } from "@/lib/ch340";
 import { toast } from "@/lib/toast";
 import { saveAs } from "file-saver";
 import {
@@ -736,7 +735,6 @@ const Connection: React.FC<ConnectionProps> = ({
     // `knownPort`: a port this site already has permission for (e.g. the board
     // that was just flashed); used directly, without the port picker.
     const connectToDevice = async (knownPort?: SerialPort) => {
-        let attemptedPort: SerialPort | null = null; // for the CH340 driver hint on failure
         try {
             if (portRef.current && portRef.current.readable) {
                 await disconnectDevice();
@@ -755,13 +753,11 @@ const Connection: React.FC<ConnectionProps> = ({
                 }) || null;
             }
 
-            attemptedPort = port;
             let baudRate;
             let serialTimeout;
 
             if (!port) {
                 port = await navigator.serial.requestPort();
-                attemptedPort = port;
                 const newPortInfo = await port.getInfo();
                 const usbProductId = newPortInfo.usbProductId ?? 0;
 
@@ -800,7 +796,7 @@ const Connection: React.FC<ConnectionProps> = ({
                 if (writer) {
                     writerRef.current = writer;
                     const whoAreYouMessage = new TextEncoder().encode("WHORU\n");
-                    setTimeout(() => {
+                    const sendWhoru = () =>
                         writer.write(whoAreYouMessage).catch((error) => {
                             // The writer can already be released by the time this
                             // fires (e.g. the user disconnected before the delay
@@ -809,25 +805,47 @@ const Connection: React.FC<ConnectionProps> = ({
                             console.warn("Failed to send device handshake:", error);
                             toast.error("Could not communicate with the device. Please try reconnecting.");
                         });
-                    }, serialTimeout);
-                    // Wait for the WHORU reply, but don't hang forever: old
-                    // firmware never answers it.
-                    let buffer = "";
+
+                    // Wait for a line that names a known board, but don't hang
+                    // forever: old firmware never answers WHORU. On Windows,
+                    // opening the port can reset an ESP32 USB board (NPG Lite):
+                    // its boot log then arrives first and the firmware may not
+                    // be listening yet. So ignore lines that aren't a board name
+                    // and resend WHORU every second until one is answered.
+                    let whoruName = "";
                     let whoruTimedOut = false;
+                    let resendTimer: ReturnType<typeof setInterval> | undefined;
+                    const firstSendTimer = setTimeout(() => {
+                        sendWhoru();
+                        resendTimer = setInterval(sendWhoru, 1000);
+                    }, serialTimeout);
                     const whoruTimer = setTimeout(() => {
                         whoruTimedOut = true;
                         reader.cancel().catch(() => { });
-                    }, serialTimeout + 3000);
+                    }, serialTimeout + 4000);
+                    const decoder = new TextDecoder();
+                    let buffer = "";
                     try {
-                        while (true) {
+                        readLines: while (true) {
                             const { value, done } = await reader.read();
                             if (done) break;
-                            if (value) {
-                                buffer += new TextDecoder().decode(value);
-                                if (buffer.includes("\n")) break;
+                            if (!value) continue;
+                            buffer += decoder.decode(value, { stream: true });
+                            const lines = buffer.split("\n");
+                            buffer = lines.pop() ?? "";
+                            for (const line of lines) {
+                                const name = line.match(/[A-Za-z0-9\-_\s]+$/)?.[0]?.trim() ?? "";
+                                if (name && BoardsList.some((b) => b.chords_id.toLowerCase() === name.toLowerCase())) {
+                                    whoruName = name;
+                                    break readLines;
+                                }
                             }
+                            // Old firmware may stream binary data without newlines.
+                            if (buffer.length > 4096) buffer = buffer.slice(-256);
                         }
                     } finally {
+                        clearTimeout(firstSendTimer);
+                        clearInterval(resendTimer);
                         clearTimeout(whoruTimer);
                     }
                     if (whoruTimedOut) {
@@ -835,8 +853,6 @@ const Connection: React.FC<ConnectionProps> = ({
                         reader.releaseLock();
                         readerRef.current = port.readable.getReader();
                     }
-                    const response = whoruTimedOut ? "" : buffer.trim().split("\n").pop();
-                    const whoruName = response?.match(/[A-Za-z0-9\-_\s]+$/)?.[0]?.trim() || "";
                     const currentPortInfo = port.getInfo();
                     const usbProductId = currentPortInfo.usbProductId ?? 0;
 
@@ -965,14 +981,7 @@ const Connection: React.FC<ConnectionProps> = ({
             await disconnectDevice();
             setIsSerial(false);
             console.warn("Error connecting to device:", error);
-            if (error instanceof DOMException && error.name === "NotFoundError") {
-                // No port picked: a clone board without the CH340 driver never
-                // shows up in the list at all.
-                showCh340DriverToast("Can't find your board");
-            } else {
-                toast.error("Failed to connect to device.");
-                if (isCh340(attemptedPort?.getInfo())) showCh340DriverToast("Couldn't connect to the board");
-            }
+            toast.error("Failed to connect to device.");
         }
         setIsLoading(false);
     };
