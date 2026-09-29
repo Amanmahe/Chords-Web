@@ -49,14 +49,11 @@ const TARGETS: Record<string, TargetSpec[]> = {
 };
 
 /**
- * One-time Windows installer that sets up the WinUSB driver for the USB
- * bootloaders (UNO R4 Minima, STM32, GIGA R1, Pico). Windows only lets the
- * browser see a bootloader that uses WinUSB, and a website can't install
- * drivers itself. Built with tools/windows-usb-driver into public/downloads,
- * so Chords Web serves it itself (relative path: works with the /Chords-Web
- * base path too, like the other public assets).
+ * Windows only lets the browser see a USB bootloader (UNO R4 Minima, STM32,
+ * GIGA R1, Pico) that uses the WinUSB driver, and a website can't install
+ * drivers. Zadig (official libwdi release) sets WinUSB up once per PC.
  */
-export const USB_DRIVER_INSTALLER_URL = "./downloads/Chords-USB-Driver-Installer.exe";
+export const USB_DRIVER_TOOL_URL = "https://github.com/pbatard/libwdi/releases/download/v1.5.1/zadig-2.9.exe";
 
 export function firmwareUrl(asset: string, tag = "latest") {
     return `${FIRMWARE_WORKER_URL}/firmware/${encodeURIComponent(tag)}/${encodeURIComponent(asset)}`;
