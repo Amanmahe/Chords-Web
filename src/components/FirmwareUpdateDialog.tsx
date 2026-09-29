@@ -14,8 +14,7 @@ import { toast } from "@/lib/toast";
 import { NeedsUserGesture, flashDevice, needsApi, setPreferredSerialPort } from "@/lib/flasher";
 import { fetchFirmware } from "@/lib/flasher/firmware";
 import {
-    USB_DRIVER_INSTALLER,
-    USB_DRIVER_RELEASE_TAG,
+    USB_DRIVER_INSTALLER_URL,
     fetchLatestFirmware,
     firmwareUrl,
     getFlashTargetsForPid,
@@ -334,7 +333,7 @@ export default function FirmwareUpdateDialog({
                                 </p>
                                 <div>
                                     <Button size="sm" asChild>
-                                        <a href={firmwareUrl(USB_DRIVER_INSTALLER, USB_DRIVER_RELEASE_TAG)} download>
+                                        <a href={USB_DRIVER_INSTALLER_URL} download>
                                             Download USB driver installer
                                         </a>
                                     </Button>

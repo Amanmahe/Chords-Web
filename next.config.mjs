@@ -5,6 +5,8 @@ const withPWA = nextPwa({
   dest: "public",
   register: true,
   skipWaiting: true,
+  // Don't make every visitor precache the Windows USB driver installer.
+  publicExcludes: ["!noprecache/**/*", "!downloads/**/*"],
 });
 
 const isGithubActor = process.env.NEXT_PUBLIC_GITHUB_ACTOR === "upsidedownlabs" || process.env.NEXT_PUBLIC_GITHUB_ACTOR === undefined

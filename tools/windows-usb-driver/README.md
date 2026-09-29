@@ -30,8 +30,9 @@ To add a board, add a `call :install ...` line to `install-drivers.bat`.
    `msvc/config.h` as described there, build the `wdi-simple` project,
    Release, x64). Copy the resulting `wdi-simple.exe` into this folder.
 2. Run `build.bat` from this folder. It packs `install-drivers.bat` and
-   `wdi-simple.exe` into one self-extracting `Chords-USB-Driver-Installer.exe`
-   with IExpress, which is built into Windows.
+   `wdi-simple.exe` into one self-extracting installer with IExpress (built
+   into Windows) and writes it to
+   **`public/downloads/Chords-USB-Driver-Installer.exe`** in Chords Web.
 
 ## Test (before publishing)
 
@@ -51,14 +52,10 @@ Windows versions you support.
 
 ## Publish
 
-1. In `Amanmahe/Chords-Arduino-Firmware`, create a release with the tag
-   **`usb-driver`** (separate from the firmware releases, so it's uploaded once).
-2. Upload `Chords-USB-Driver-Installer.exe` to it, with exactly that file name.
-3. Check the Worker serves it:
-   `https://mute-union-1cca.amanmaheshwari715.workers.dev/firmware/usb-driver/Chords-USB-Driver-Installer.exe`
-
-The names are set in `src/lib/flasher/chords.ts` (`USB_DRIVER_INSTALLER`,
-`USB_DRIVER_RELEASE_TAG`).
+Commit `public/downloads/Chords-USB-Driver-Installer.exe` and deploy Chords
+Web as usual. The site serves it itself at `/downloads/Chords-USB-Driver-Installer.exe`
+(no release or Worker involved). The link is `USB_DRIVER_INSTALLER_URL` in
+`src/lib/flasher/chords.ts`.
 
 ## Windows SmartScreen
 

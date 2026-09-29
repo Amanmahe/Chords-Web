@@ -10,7 +10,9 @@ if not exist "wdi-simple.exe" (
     exit /b 1
 )
 
-set "OUT=%~dp0Chords-USB-Driver-Installer.exe"
+:: Output goes to Chords Web's public folder, so the site serves it itself.
+if not exist "%~dp0..\..\public\downloads" mkdir "%~dp0..\..\public\downloads"
+set "OUT=%~dp0..\..\public\downloads\Chords-USB-Driver-Installer.exe"
 set "SED=%TEMP%\chords-usb-driver.sed"
 
 > "%SED%" (
