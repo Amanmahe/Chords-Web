@@ -10,7 +10,7 @@ import {
     DialogTitle,
 } from "./ui/dialog";
 import { Button } from "./ui/button";
-import { toast } from "sonner";
+import { toast } from "@/lib/toast";
 import { NeedsUserGesture, flashDevice, needsApi, setPreferredSerialPort } from "@/lib/flasher";
 import { fetchFirmware } from "@/lib/flasher/firmware";
 import {
@@ -213,7 +213,7 @@ export default function FirmwareUpdateDialog({
                 const cancelled = /No port selected|No device selected|NotFoundError|aborted a request/i.test(msg);
                 setStatus("error");
                 log(cancelled ? "Cancelled: no device was selected." : `Error: ${msg}`, "err");
-                if (cancelled) toast("Flashing cancelled: no device was selected.");
+                if (cancelled) toast.message("Flashing cancelled: no device was selected.");
                 else toast.error("Firmware update failed", { description: msg });
             }
         } finally {

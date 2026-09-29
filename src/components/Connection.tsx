@@ -42,7 +42,7 @@ import {
 
 import { BoardsList } from "./boards";
 import FirmwareUpdateDialog from "./FirmwareUpdateDialog";
-import { toast } from "sonner";
+import { toast } from "@/lib/toast";
 import { saveAs } from "file-saver";
 import {
     Tooltip,
@@ -1054,7 +1054,7 @@ const Connection: React.FC<ConnectionProps> = ({
                 setRepForgeDeviceConnected(false);
                 FFT(false);
                 RepForge(false);
-                toast("Disconnected from device", {
+                toast.message("Disconnected from device", {
                     action: {
                         label: "Reconnect",
                         onClick: () => connectToDevice(),
@@ -1411,7 +1411,7 @@ const Connection: React.FC<ConnectionProps> = ({
             }
 
             server.disconnect(); // Disconnect the device
-            toast("Disconnected from device", {
+            toast.message("Disconnected from device", {
                 action: {
                     label: "Reconnect",
                     onClick: () => connectBLE(),
