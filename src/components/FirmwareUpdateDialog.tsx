@@ -11,6 +11,7 @@ import {
 } from "./ui/dialog";
 import { Button } from "./ui/button";
 import { toast } from "@/lib/toast";
+import { isCh340, showCh340DriverToast } from "@/lib/ch340";
 import { NeedsUserGesture, flashDevice, needsApi, setPreferredSerialPort } from "@/lib/flasher";
 import { fetchFirmware } from "@/lib/flasher/firmware";
 import {
@@ -72,7 +73,6 @@ export default function FirmwareUpdateDialog({
     const [status, setStatus] = useState<Status>("idle");
     const [progress, setProgress] = useState<{ pct: number; label: string } | null>(null);
     const [logs, setLogs] = useState<LogLine[]>([]);
-    const [skipTouch, setSkipTouch] = useState(false);
     const logRef = useRef<HTMLDivElement>(null);
     // Firmware downloaded by the last attempt, reused when Flash is pressed again.
     // Keyed by "<tag>/<asset>"; started as soon as the version is known (see
@@ -124,10 +124,6 @@ export default function FirmwareUpdateDialog({
     const busy = status === "flashing";
     const assetMissing =
         !!target && Array.isArray(latest?.assets) && !latest.assets.some((a) => a.name === target.asset);
-    const isDfuTouch =
-        !!target &&
-        ["dfu", "dfuse", "picoboot"].includes(target.device.protocol) &&
-        !!target.device.touch1200;
 
     const runFlash = async () => {
         if (!target || busy) return;
@@ -142,12 +138,15 @@ export default function FirmwareUpdateDialog({
         };
         // After a "click Flash again" (status "waiting") the board is already
         // in its bootloader: its sketch serial port is gone, so skip the
-        // 1200 baud reset and go straight to the USB device picker.
-        const inBootloader = skipTouch || status === "waiting";
+        // 1200 baud reset and go straight to the USB device picker. Otherwise
+        // the flasher works out by itself whether the board is in bootloader.
+        const inBootloader = status === "waiting";
         log(`Flashing ${target.asset} (${tag}) to ${target.label}`, "warn");
 
+        let flashPort: SerialPort | null = null; // for the CH340 driver hint on failure
         try {
             const port = await beforeFlash();
+            flashPort = port;
 
             // Serial-based flashing (and the 1200 baud reset) can reuse the port
             // Chords was just using instead of asking the user to pick it again.
@@ -214,7 +213,13 @@ export default function FirmwareUpdateDialog({
                 setStatus("error");
                 log(cancelled ? "Cancelled: no device was selected." : `Error: ${msg}`, "err");
                 if (cancelled) toast.message("Flashing cancelled: no device was selected.");
-                else toast.error("Firmware update failed", { description: msg });
+                else {
+                    toast.error("Firmware update failed", { description: msg });
+                    // Clone boards: a missing CH340 driver is a common cause.
+                    if (isCh340(flashPort?.getInfo()) || target.device.id.includes("clone")) {
+                        showCh340DriverToast("Couldn't flash the board");
+                    }
+                }
             }
         } finally {
             setPreferredSerialPort(null);
@@ -303,19 +308,6 @@ export default function FirmwareUpdateDialog({
                             <p className="text-sm text-destructive">
                                 {target.asset} isn&apos;t in release {latest?.tag}.
                             </p>
-                        )}
-
-                        {isDfuTouch && (
-                            <label className="flex items-center gap-2 text-sm">
-                                <input
-                                    type="checkbox"
-                                    checked={skipTouch}
-                                    disabled={busy}
-                                    onChange={(e) => setSkipTouch(e.target.checked)}
-                                    className="accent-primary"
-                                />
-                                Board is already in bootloader
-                            </label>
                         )}
 
                         {progress && (

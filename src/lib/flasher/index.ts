@@ -93,7 +93,14 @@ export async function flashDevice(req: FlashRequest, cb: FlashCallbacks) {
     case "picoboot": {
       let afterReset = false;
       const inBootloader = !!(await findBootloaderUsb(req.device.usbFilters!));
-      if (req.device.touch1200 && !req.skipTouch && !inBootloader) {
+      // The sketch's serial port only exists while the sketch runs: if it's
+      // gone, the board is (most likely) already in its bootloader, so don't
+      // try to reset it and go straight to the DFU device.
+      const sketchGone = (await sketchPortPresent(req.device.serialFilters)) === false;
+      if (sketchGone && req.device.touch1200 && !req.skipTouch && !inBootloader) {
+        cb.log("The board's serial port isn't there, so it's likely already in bootloader mode.");
+      }
+      if (req.device.touch1200 && !req.skipTouch && !inBootloader && !sketchGone) {
         cb.log("Resetting the board into the bootloader…");
         const port = await findOrPickSerialPort(req.device.serialFilters).catch((e) => {
           // No serial port picked: the board may already be in bootloader mode
@@ -110,10 +117,11 @@ export async function flashDevice(req: FlashRequest, cb: FlashCallbacks) {
           await touch1200(port);
           cb.log("Waiting for the bootloader to enumerate…");
           if (!(await left)) {
-            throw new Error(
-              "The board didn't restart into its bootloader: its serial port is still there. " +
-                (req.device.resetHint ?? "Its firmware may not support the 1200 baud reset.") +
-                ' Put it in bootloader mode by hand, then use "Board is already in bootloader".',
+            // The reset may still have worked without the browser reporting the
+            // disconnect: look for the bootloader anyway instead of giving up.
+            cb.log(
+              "The serial port didn't report a restart; looking for the bootloader anyway. " +
+                "If nothing is found, double-tap RESET and press Flash again.",
             );
           }
           await sleep(1000);
@@ -126,6 +134,23 @@ export async function flashDevice(req: FlashRequest, cb: FlashCallbacks) {
       return req.device.protocol === "dfu" ? flashDfu(job, afterReset) : flashDfuse(job, afterReset);
     }
   }
+}
+
+/**
+ * Whether a serial port matching `filters` that this site may use is plugged in;
+ * undefined when that can't be told (no filters / no Web Serial).
+ */
+async function sketchPortPresent(filters?: SerialPortFilter[]): Promise<boolean | undefined> {
+  if (!filters?.length || typeof navigator === "undefined" || !("serial" in navigator)) return undefined;
+  const ports = await navigator.serial.getPorts();
+  return ports.some((p) => {
+    const i = p.getInfo();
+    return filters.some(
+      (f) =>
+        (f.usbVendorId === undefined || f.usbVendorId === i.usbVendorId) &&
+        (f.usbProductId === undefined || f.usbProductId === i.usbProductId),
+    );
+  });
 }
 
 /**

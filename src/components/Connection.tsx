@@ -42,6 +42,7 @@ import {
 
 import { BoardsList } from "./boards";
 import FirmwareUpdateDialog from "./FirmwareUpdateDialog";
+import { isCh340, showCh340DriverToast } from "@/lib/ch340";
 import { toast } from "@/lib/toast";
 import { saveAs } from "file-saver";
 import {
@@ -528,8 +529,9 @@ const Connection: React.FC<ConnectionProps> = ({
         const filename = currentFileNameRef.current;
 
         if (filename) {
-            // Check if the record already exists
-            workerRef.current?.postMessage({ action: 'checkExistence', filename, canvasCount, selectChannel });
+            // The worker's `write` appends to an existing recording itself (it
+            // has no 'checkExistence' action: sending one only produced an
+            // "Invalid action" reply that other handlers mistook for their error).
             writeToIndexedDB(data, filename, canvasCount, selectChannel);
         }
     };
@@ -570,9 +572,9 @@ const Connection: React.FC<ConnectionProps> = ({
                 if (blob) {
                     saveAs(blob, filename); // FileSaver.js
                     toast.success("File downloaded successfully.");
-                } else (error: any) => {
+                } else if (error) {
                     console.warn("Worker error:", error);
-                    toast.error(`Error during file download: ${error.message}`);
+                    toast.error(`Error during file download: ${error}`);
                 }
             };
 
@@ -734,6 +736,7 @@ const Connection: React.FC<ConnectionProps> = ({
     // `knownPort`: a port this site already has permission for (e.g. the board
     // that was just flashed); used directly, without the port picker.
     const connectToDevice = async (knownPort?: SerialPort) => {
+        let attemptedPort: SerialPort | null = null; // for the CH340 driver hint on failure
         try {
             if (portRef.current && portRef.current.readable) {
                 await disconnectDevice();
@@ -752,11 +755,13 @@ const Connection: React.FC<ConnectionProps> = ({
                 }) || null;
             }
 
+            attemptedPort = port;
             let baudRate;
             let serialTimeout;
 
             if (!port) {
                 port = await navigator.serial.requestPort();
+                attemptedPort = port;
                 const newPortInfo = await port.getInfo();
                 const usbProductId = newPortInfo.usbProductId ?? 0;
 
@@ -960,7 +965,14 @@ const Connection: React.FC<ConnectionProps> = ({
             await disconnectDevice();
             setIsSerial(false);
             console.warn("Error connecting to device:", error);
-            toast.error("Failed to connect to device.");
+            if (error instanceof DOMException && error.name === "NotFoundError") {
+                // No port picked: a clone board without the CH340 driver never
+                // shows up in the list at all.
+                showCh340DriverToast("Can't find your board");
+            } else {
+                toast.error("Failed to connect to device.");
+                if (isCh340(attemptedPort?.getInfo())) showCh340DriverToast("Couldn't connect to the board");
+            }
         }
         setIsLoading(false);
     };
@@ -975,6 +987,9 @@ const Connection: React.FC<ConnectionProps> = ({
                 workerRef.current.postMessage({ action: 'getFileCountFromIndexedDB' });
 
                 workerRef.current.onmessage = (event) => {
+                    // Only this request's reply: e.g. 'writeComplete' messages
+                    // from an ongoing recording arrive here too.
+                    if (event.data.action !== 'getFileCountFromIndexedDB' && !event.data.error) return;
                     if (event.data.allData) {
                         resolve(event.data.allData);
                     } else if (event.data.error) {
@@ -997,22 +1012,30 @@ const Connection: React.FC<ConnectionProps> = ({
     // then connect without asking the user.
     const reconnectAfterFlash = async () => {
         const pid = firmwarePid;
-        await new Promise((r) => setTimeout(r, 1500));
-        const deadline = Date.now() + 15000;
-        while (Date.now() < deadline) {
-            const ports = await navigator.serial.getPorts();
-            const flashedPort = ports.find((p) => pid == null || p.getInfo().usbProductId === pid);
-            if (flashedPort) {
-                // Give the new firmware a moment to boot before sending WHORU.
-                await new Promise((r) => setTimeout(r, 1000));
-                await connectToDevice(flashedPort);
-                return;
+        // Show "Connecting..." (and disable the Connect buttons) for the whole
+        // wait, not only once connectToDevice starts.
+        setIsLoading(true);
+        try {
+            await new Promise((r) => setTimeout(r, 1500));
+            const deadline = Date.now() + 15000;
+            while (Date.now() < deadline) {
+                const ports = await navigator.serial.getPorts();
+                const flashedPort = ports.find((p) => pid == null || p.getInfo().usbProductId === pid);
+                if (flashedPort) {
+                    // Give the new firmware a moment to boot before sending WHORU.
+                    await new Promise((r) => setTimeout(r, 1000));
+                    await connectToDevice(flashedPort); // clears isLoading when done
+                    return;
+                }
+                await new Promise((r) => setTimeout(r, 500));
             }
-            await new Promise((r) => setTimeout(r, 500));
+            toast.error("Couldn't reconnect after the update", {
+                description: "Press RESET on the board, then connect again.",
+            });
+        } catch (error) {
+            console.warn("Reconnect after flashing failed:", error);
         }
-        toast.error("Couldn't reconnect after the update", {
-            description: "Press RESET on the board, then connect again.",
-        });
+        setIsLoading(false);
     };
 
     const disconnectDevice = async (): Promise<void> => {
@@ -2098,7 +2121,10 @@ const Connection: React.FC<ConnectionProps> = ({
                                 </PopoverTrigger>
                                 <PopoverContent className="p-4 text-base shadow-lg rounded-xl w-full mx-4 mb-2">
                                     <div className="space-y-4">
-                                        {/* List each file with download and delete actions */}
+                                        {/* List each file with download and delete actions. Scrolls
+                                            on its own so every recording is reachable however many
+                                            there are; the buttons below stay visible. */}
+                                        <div className="max-h-[min(60vh,24rem)] overflow-y-auto space-y-4 pr-1 [scrollbar-width:thin] [scrollbar-color:hsl(var(--muted-foreground)/0.4)_transparent] [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-muted-foreground/40 [&::-webkit-scrollbar-track]:bg-transparent">
                                         {datasets.length > 0 ? (
                                             datasets.map((dataset) => (
                                                 <div key={dataset} className="flex justify-between items-center">
@@ -2132,6 +2158,7 @@ const Connection: React.FC<ConnectionProps> = ({
                                         ) : (
                                             <p className="text-base ">No datasets available</p>
                                         )}
+                                        </div>
                                         {/* Download all as ZIP and delete all options */}
                                         {datasets.length > 0 && (
                                             <div className="flex justify-between mt-4">

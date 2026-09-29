@@ -173,7 +173,7 @@ export const DEVICES: DeviceDef[] = [
     instructions: [
       "Connect the Pico over USB and press Flash.",
       "First time only: pick the Pico's serial port, then press Flash again and pick \"RP2 Boot\".",
-      "New Pico or no sketch running? Hold BOOTSEL while plugging it in, then use \"Board is already in bootloader\".",
+      "New Pico or no sketch running? Hold BOOTSEL while plugging it in, then press Flash: it is detected automatically.",
       "Windows only: install the WinUSB driver once for \"RP2 Boot (Interface 1)\" with Zadig.",
     ],
   },
