@@ -165,7 +165,17 @@ export async function findOrPickSerialPort(filters?: SerialPortFilter[]) {
  * closing it makes the board jump into its bootloader.
  */
 export async function touch1200(port: SerialPort) {
-  await port.open({ baudRate: 1200 });
+  // Windows keeps a COM port busy for a moment after it was closed (e.g. by
+  // Chords just before flashing), so the first open can fail: retry briefly.
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await port.open({ baudRate: 1200 });
+      break;
+    } catch (e) {
+      if (attempt >= 10 || !(e instanceof DOMException && e.name === "NetworkError")) throw e;
+      await sleep(300);
+    }
+  }
   try {
     await port.setSignals({ dataTerminalReady: false });
   } catch {}

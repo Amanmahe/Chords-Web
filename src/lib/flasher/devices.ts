@@ -22,7 +22,6 @@ const STM32_DFU_STEPS = [
   "Hold BOOT0, tap NRST (reset), then release BOOT0.",
   "The board now shows up as \"STM32 BOOTLOADER\" (0483:DF11).",
   "Press Flash and pick \"STM32 BOOTLOADER\". The browser remembers it for next time.",
-  "Windows: if flashing here isn't possible, download the firmware and flash it with STM32CubeProgrammer.",
 ];
 
 const AVR_STEPS = [
@@ -174,8 +173,7 @@ export const DEVICES: DeviceDef[] = [
       "Connect the Pico over USB and press Flash.",
       "First time only: pick the Pico's serial port, then press Flash again and pick \"RP2 Boot\".",
       "New Pico or no sketch running? Hold BOOTSEL while plugging it in, then press Flash: it is detected automatically.",
-      "Windows only: install the WinUSB driver once for \"RP2 Boot (Interface 1)\" with Zadig.",
-    ],
+        ],
   },
 
   // ---------------------------------------------------------------- AVR

@@ -48,6 +48,17 @@ const TARGETS: Record<string, TargetSpec[]> = {
     "ESP32-S3": [{ deviceId: "esp32-s3", asset: "Chords-ESP32-S3.bin", espChip: "ESP32-S3" }],
 };
 
+/**
+ * One-time Windows installer that sets up the WinUSB driver for the USB
+ * bootloaders (UNO R4 Minima, STM32, GIGA R1, Pico). Windows only lets the
+ * browser see a bootloader that uses WinUSB, and a website can't install
+ * drivers itself. Built with tools/windows-usb-driver and published in the
+ * firmware repo's "usb-driver" release; served by the firmware Worker.
+ */
+export const USB_DRIVER_INSTALLER = "Chords-USB-Driver-Installer.exe";
+/** Its own release (not a firmware version), so it's uploaded once. */
+export const USB_DRIVER_RELEASE_TAG = "usb-driver";
+
 export function firmwareUrl(asset: string, tag = "latest") {
     return `${FIRMWARE_WORKER_URL}/firmware/${encodeURIComponent(tag)}/${encodeURIComponent(asset)}`;
 }
