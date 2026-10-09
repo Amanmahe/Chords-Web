@@ -44,8 +44,8 @@ const TARGETS: Record<string, TargetSpec[]> = {
         { label: "STM32F401CC Black Pill", deviceId: "stm32f401cc-black-pill", asset: "Chords-STM32F401CC-BLACK-PILL.bin" },
         { label: "STM32F411CE Black Pill", deviceId: "stm32f411ce-black-pill", asset: "Chords-STM32F411CE-BLACK-PILL.bin" },
     ],
-    "NPG-LITE": [{ deviceId: "npg-lite-esp32c6", asset: "Chords-NPG-LITE-ESP32C6.bin", espChip: "ESP32-C6" }],
-    "ESP32-S3": [{ deviceId: "esp32-s3", asset: "Chords-ESP32-S3.bin", espChip: "ESP32-S3" }],
+    "NPG-LITE": [{ deviceId: "npg-lite-esp32c6", asset: "Chords-NPG-LITE-Serial-ESP32C6.merged.bin", espChip: "ESP32-C6" }],
+    "ESP32-S3": [{ deviceId: "esp32-s3", asset: "Chords-ESP32-S3.merged.bin", espChip: "ESP32-S3" }],
 };
 
 /**
