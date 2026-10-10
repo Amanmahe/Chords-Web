@@ -78,7 +78,7 @@ async function requestUsb(filters: USBDeviceFilter[], label: string, cb?: FlashC
   }
 }
 
-function accessDenied(filters: USBDeviceFilter[], label: string, cause: unknown) {
+export function accessDenied(filters: USBDeviceFilter[], label: string, cause: unknown) {
   const f = filters[0] ?? {};
   const id = `${(f.vendorId ?? 0).toString(16).padStart(4, "0")}:${(f.productId ?? 0).toString(16).padStart(4, "0")}`;
   const hint = /Win/i.test(navigator.userAgent)
@@ -104,8 +104,14 @@ export async function openBootloaderUsb(
     throw new Error("WebUSB is not available. Use Chrome, Edge or Opera on desktop.");
   }
   // After a reset, give the bootloader time to enumerate and udev time to set permissions.
-  let { dev } = await openAuthorized(filters, afterReset ? 5000 : 0);
+  const first = await openAuthorized(filters, afterReset ? 5000 : 0);
+  let dev = first.dev;
   if (dev) return dev;
+
+  // Windows: the paired bootloader is plugged in but can't be opened, i.e. it
+  // lacks the WinUSB driver. The list would only offer that same unusable
+  // board, so go straight to the driver steps instead of showing it.
+  if (first.error && /Win/i.test(navigator.userAgent)) throw accessDenied(filters, label, first.error);
 
   // We just reset the board ourselves and it isn't granted yet: always stop
   // and let the user press Continue. Opening the list straight away would

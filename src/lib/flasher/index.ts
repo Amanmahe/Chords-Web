@@ -1,4 +1,4 @@
-import type { DeviceDef, FlashCallbacks, FlashJob } from "./types";
+import { NeedsUserGesture, type DeviceDef, type FlashCallbacks, type FlashJob } from "./types";
 import { fetchFirmware, toBinary } from "./firmware";
 import { findOrPickSerialPort, pickSerialPort, sleep, touch1200 } from "./serial";
 import { flashEsp } from "./esp";
@@ -114,7 +114,24 @@ export async function flashDevice(req: FlashRequest, cb: FlashCallbacks) {
             port.addEventListener("disconnect", () => resolve(true), { once: true });
             setTimeout(() => resolve(false), 3000);
           });
-          await touch1200(port);
+          try {
+            await touch1200(port);
+          } catch (e) {
+            // On Windows, opening at 1200 baud can restart the board (UNO R4)
+            // before open() returns, so open() fails although the reset worked.
+            // The port vanishing tells the two apart.
+            if (await left) {
+              cb.log("The board restarted into its bootloader.");
+            } else {
+              // Really couldn't open it (busy, e.g. open in another app): let the
+              // user enter the bootloader by hand and continue.
+              cb.log(`Couldn't reset the board automatically (${e instanceof Error ? e.message : String(e)}).`);
+              throw new NeedsUserGesture(
+                `${req.device.resetHint ?? "Double-tap the RESET button on the board to put it in bootloader mode (the LED fades in and out)."} ` +
+                  `Then click Continue and select "${req.device.bootloaderName ?? "DFU device"}" in the browser's list.`,
+              );
+            }
+          }
           cb.log("Waiting for the bootloader to enumerate…");
           if (!(await left)) {
             // The reset may still have worked without the browser reporting the

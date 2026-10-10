@@ -2,7 +2,7 @@ import type { FlashCallbacks, FlashJob } from "./types";
 import { hex } from "./firmware";
 import { sleep } from "./serial";
 import { NeedsUserGesture } from "./types";
-import { findBootloaderUsb, openBootloaderUsb, restartIfStillThere } from "./usb";
+import { accessDenied, findBootloaderUsb, openBootloaderUsb, restartIfStillThere } from "./usb";
 
 /* -------------------------------------------------------------------------- */
 /* USB DFU 1.1 + ST DfuSe over WebUSB                                          */
@@ -212,8 +212,12 @@ function parseConfig(d: DataView): DescInfo {
   return info;
 }
 
-// How long a bootloader that has just appeared gets to become usable.
-const SETUP_RETRY_MS = 6000;
+// Attempts a bootloader that has just appeared gets to become usable. A
+// count, not a time: one unanswered request alone can take TRANSFER_TIMEOUT_MS.
+const SETUP_ATTEMPTS = 3;
+// Descriptor reads are only extras (transfer size, alt names), so they get a
+// short timeout and a fallback instead of failing the flash.
+const DESCRIPTOR_TIMEOUT_MS = 3000;
 
 /**
  * Open the bootloader and bring it to dfuIDLE. Right after it appears (reset,
@@ -229,18 +233,17 @@ async function openDfu(
   preferAlt?: RegExp,
 ) {
   let dev = await openBootloaderUsb(filters, afterReset, label, cb);
-  const until = performance.now() + SETUP_RETRY_MS;
-  for (;;) {
+  for (let attempt = 1; ; attempt++) {
     let dfu: DfuDevice | null = null;
     try {
       if (!dev.opened) await dev.open();
-      dfu = await setupDfu(dev, cb, preferAlt);
+      dfu = await setupDfu(dev, cb, preferAlt, filters, label);
       await dfu.ensureIdle();
       return dfu;
     } catch (e) {
       if (dfu) await dfu.close();
       else await dev.close().catch(() => {});
-      if (e instanceof NeedsUserGesture || performance.now() >= until) throw e;
+      if (e instanceof NeedsUserGesture || e instanceof DriverError || attempt >= SETUP_ATTEMPTS) throw e;
       cb.log(`The bootloader isn't ready yet (${e instanceof Error ? e.message : String(e)}); retrying…`);
       await sleep(500);
       // It may have re-enumerated: prefer the entry that is there now.
@@ -249,30 +252,66 @@ async function openDfu(
   }
 }
 
-async function setupDfu(dev: USBDevice, cb: FlashCallbacks, preferAlt?: RegExp) {
+/** Resolve to `fallback` if `p` fails or takes longer than `ms`. */
+function orFallback<T>(p: Promise<T>, fallback: T, ms: number): Promise<T> {
+  return Promise.race([p.catch(() => fallback), sleep(ms).then(() => fallback)]);
+}
+
+/** The bootloader opened but its interface can't be claimed: a driver problem, not worth retrying. */
+class DriverError extends Error {}
+
+async function setupDfu(
+  dev: USBDevice,
+  cb: FlashCallbacks,
+  preferAlt: RegExp | undefined,
+  filters: USBDeviceFilter[],
+  label: string,
+) {
   if (!dev.configuration) await dev.selectConfiguration(1);
 
-  const desc = parseConfig(await withTimeout(readConfigDescriptor(dev), "USB descriptors"));
+  // DFU-mode alternates, from what the browser already parsed.
+  const dfuIntfs = dev.configuration!.interfaces.filter((itf) =>
+    itf.alternates.some((a) => a.interfaceClass === 0xfe && a.interfaceSubclass === 0x01),
+  );
+  if (!dfuIntfs.length) throw new Error("Selected device has no DFU interface");
 
-  // Collect DFU-mode alternates
+  // Claim before any control request: on Windows the browser sends them
+  // through the claimed interface's WinUSB driver, and a request made before
+  // the claim can go unanswered (the GIGA stalled here: "USB descriptors").
+  // Without the WinUSB driver, Windows opens the device but refuses the claim.
+  for (const itf of dfuIntfs) {
+    await dev.claimInterface(itf.interfaceNumber).catch((e) => {
+      const err = accessDenied(filters, label, e);
+      throw /Win/i.test(navigator.userAgent) ? new DriverError(err.message, { cause: e }) : err;
+    });
+  }
+
+  const noDesc: DescInfo = { transferSize: 0, altNames: new Map() };
+  const desc = await orFallback(
+    readConfigDescriptor(dev).then(parseConfig),
+    noDesc,
+    DESCRIPTOR_TIMEOUT_MS,
+  );
+
   const alts: { intf: number; alt: number; name: string }[] = [];
-  for (const itf of dev.configuration!.interfaces) {
+  for (const itf of dfuIntfs) {
     for (const a of itf.alternates) {
       if (a.interfaceClass === 0xfe && a.interfaceSubclass === 0x01) {
         let name = a.interfaceName ?? "";
         if (!name) {
-          name = await readString(dev, desc.altNames.get(`${itf.interfaceNumber}:${a.alternateSetting}`) ?? 0).catch(
-            () => "",
-          );
+          const index = desc.altNames.get(`${itf.interfaceNumber}:${a.alternateSetting}`) ?? 0;
+          name = await orFallback(readString(dev, index), "", DESCRIPTOR_TIMEOUT_MS);
         }
         alts.push({ intf: itf.interfaceNumber, alt: a.alternateSetting, name });
       }
     }
   }
-  if (!alts.length) throw new Error("Selected device has no DFU interface");
   const chosen = (preferAlt && alts.find((a) => preferAlt.test(a.name))) || alts.find((a) => a.alt === 0) || alts[0];
 
-  await dev.claimInterface(chosen.intf);
+  // Keep only the chosen interface claimed.
+  for (const itf of dfuIntfs) {
+    if (itf.interfaceNumber !== chosen.intf) await dev.releaseInterface(itf.interfaceNumber).catch(() => {});
+  }
   if (chosen.alt !== 0 || alts.length > 1) await dev.selectAlternateInterface(chosen.intf, chosen.alt);
 
   const xfer = desc.transferSize || 1024;

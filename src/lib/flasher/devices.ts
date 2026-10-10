@@ -173,6 +173,7 @@ export const DEVICES: DeviceDef[] = [
     accept: ".uf2,.bin",
     usbFilters: [{ vendorId: RPI_VID, productId: 0x0003 }],
     bootloaderName: "RP2 Boot",
+    resetHint: "Unplug the Pico, then hold BOOTSEL while plugging it back in.",
     touch1200: true,
     serialFilters: [{ usbVendorId: RPI_VID }],
     instructions: [
