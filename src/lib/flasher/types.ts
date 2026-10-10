@@ -37,6 +37,8 @@ export interface DeviceDef {
   espChip?: string;
   /** WebUSB filters for the bootloader (DFU) device. */
   usbFilters?: USBDeviceFilter[];
+  /** How the bootloader is named in the browser's USB device list, e.g. "Giga". */
+  bootloaderName?: string;
   /** DfuSe: start address of the application. */
   dfuseAddress?: number;
   /** Open the running sketch's serial port at 1200 baud to jump to the bootloader first. */
@@ -53,6 +55,8 @@ export interface DeviceDef {
 export interface FlashCallbacks {
   log: (msg: string) => void;
   progress: (percent: number, label?: string) => void;
+  /** The browser's USB device list opened (true) or closed (false). */
+  pickerOpen?: (open: boolean) => void;
 }
 
 export interface FlashJob {

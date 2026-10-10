@@ -83,6 +83,14 @@ export default function FirmwareUpdateDialog({
     const [status, setStatus] = useState<Status>("idle");
     // Windows couldn't find / open the bootloader: it needs the WinUSB driver.
     const [needsWinUsb, setNeedsWinUsb] = useState(false);
+    // What to do next while the board waits in its bootloader for Continue.
+    const [waitingMsg, setWaitingMsg] = useState<string | null>(null);
+    // Fires when the browser's USB list stays open without a pick.
+    const pickerTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const clearPickerTimer = () => {
+        if (pickerTimerRef.current) clearTimeout(pickerTimerRef.current);
+        pickerTimerRef.current = null;
+    };
     const [progress, setProgress] = useState<{ pct: number; label: string } | null>(null);
     const [logs, setLogs] = useState<LogLine[]>([]);
     const logRef = useRef<HTMLDivElement>(null);
@@ -171,6 +179,7 @@ export default function FirmwareUpdateDialog({
             if (abort.signal.aborted) throw new FlashCancelled();
         };
         setStatus("flashing");
+        setWaitingMsg(null);
         setProgress({ pct: 0, label: "connecting" });
 
         // Pin the download to the version shown in the dialog.
@@ -237,6 +246,23 @@ export default function FirmwareUpdateDialog({
                         checkCancelled();
                         setProgress({ pct: Math.max(0, Math.min(100, pct)), label: label ?? "" });
                     },
+                    // Nothing picked within 15 s usually means the board isn't
+                    // listed: on Windows, its driver is missing.
+                    pickerOpen: (isOpen) => {
+                        clearPickerTimer();
+                        if (!isOpen) return;
+                        setProgress((p) => p && { ...p, label: "waiting for you to select the board" });
+                        pickerTimerRef.current = setTimeout(() => {
+                            if (abort.signal.aborted) return;
+                            setNeedsWinUsb(true);
+                            log(
+                                isWindows
+                                    ? "No board selected yet. If it isn't in the list, or selecting it fails, Windows needs the USB driver: follow the steps below."
+                                    : "No board selected yet. If it isn't in the list, make sure it's in bootloader mode, then replug it.",
+                                "warn"
+                            );
+                        }, 15000);
+                    },
                 }
             );
             checkCancelled();
@@ -259,6 +285,7 @@ export default function FirmwareUpdateDialog({
                 // The board rebooted into its bootloader; the browser needs a
                 // fresh click before it can show the USB device picker.
                 setStatus("waiting");
+                setWaitingMsg(e.message);
                 log(e.message, "warn");
             } else {
                 const msg = e instanceof Error ? e.message : String(e);
@@ -272,6 +299,7 @@ export default function FirmwareUpdateDialog({
                 else toast.error("Firmware update failed", { description: msg });
             }
         } finally {
+            clearPickerTimer();
             setPreferredSerialPort(null);
             if (abortRef.current === abort) abortRef.current = null;
         }
@@ -284,6 +312,7 @@ export default function FirmwareUpdateDialog({
         if (!abort) return;
         abort.abort();
         abortRef.current = null;
+        clearPickerTimer();
         // A step waiting on the device (no answer, or mid-transfer) only ends
         // when the device is closed.
         if (target?.device.usbFilters && "usb" in navigator) {
@@ -439,6 +468,13 @@ export default function FirmwareUpdateDialog({
                                 <div className="h-2 overflow-hidden rounded-full bg-muted">
                                     <div className="h-full bg-primary transition-all" style={{ width: `${progress.pct}%` }} />
                                 </div>
+                            </div>
+                        )}
+
+                        {status === "waiting" && waitingMsg && (
+                            <div className="rounded-md border border-primary/40 bg-primary/10 p-3 text-sm">
+                                <p className="font-medium">Next step</p>
+                                <p className="text-muted-foreground">{waitingMsg}</p>
                             </div>
                         )}
 

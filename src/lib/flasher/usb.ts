@@ -1,4 +1,4 @@
-import { NeedsUserGesture } from "./types";
+import { NeedsUserGesture, type FlashCallbacks } from "./types";
 import { sleep } from "./serial";
 
 /* -------------------------------------------------------------------------- */
@@ -47,15 +47,21 @@ export async function findBootloaderUsb(filters: USBDeviceFilter[]) {
   return (await openAuthorized(filters, 0)).dev;
 }
 
-async function requestUsb(filters: USBDeviceFilter[], label: string): Promise<USBDevice> {
+/** Shown when the board is in its bootloader and the user must pick it. */
+function pickBootloaderMessage(label: string) {
+  return (
+    `The board is now in bootloader (DFU) mode. Click Continue and select "${label}" in the browser's list. ` +
+    "The browser remembers it, so next time a single click is enough."
+  );
+}
+
+async function requestUsb(filters: USBDeviceFilter[], label: string, cb?: FlashCallbacks): Promise<USBDevice> {
+  cb?.pickerOpen?.(true);
   try {
     return await navigator.usb.requestDevice({ filters });
   } catch (e) {
     if (e instanceof DOMException && e.name === "SecurityError") {
-      throw new NeedsUserGesture(
-        `One-time setup: the board is in bootloader mode. Click Flash again and pick the ${label}. ` +
-          "The browser remembers it, so next time a single click is enough.",
-      );
+      throw new NeedsUserGesture(pickBootloaderMessage(label));
     }
     if (e instanceof DOMException && e.name === "NotFoundError") {
       throw new Error(
@@ -67,6 +73,8 @@ async function requestUsb(filters: USBDeviceFilter[], label: string): Promise<US
       );
     }
     throw e;
+  } finally {
+    cb?.pickerOpen?.(false);
   }
 }
 
@@ -86,7 +94,12 @@ function accessDenied(filters: USBDeviceFilter[], label: string, cause: unknown)
  * Open the bootloader: reuse a device this site was already granted, or ask
  * the user to pick one (needs a click, so it may throw NeedsUserGesture).
  */
-export async function openBootloaderUsb(filters: USBDeviceFilter[], afterReset: boolean, label: string) {
+export async function openBootloaderUsb(
+  filters: USBDeviceFilter[],
+  afterReset: boolean,
+  label: string,
+  cb?: FlashCallbacks,
+) {
   if (!("usb" in navigator)) {
     throw new Error("WebUSB is not available. Use Chrome, Edge or Opera on desktop.");
   }
@@ -94,9 +107,15 @@ export async function openBootloaderUsb(filters: USBDeviceFilter[], afterReset: 
   let { dev } = await openAuthorized(filters, afterReset ? 5000 : 0);
   if (dev) return dev;
 
+  // We just reset the board ourselves and it isn't granted yet: always stop
+  // and let the user press Continue. Opening the list straight away would
+  // depend on timing (the click may still count, and the bootloader may not
+  // be listed yet), which made some boards fail where others asked.
+  if (afterReset) throw new NeedsUserGesture(pickBootloaderMessage(label));
+
   // Nothing authorized opened (none granted yet, e.g. a different board, or
   // only stale entries). Ask the user; each board is granted separately.
-  const picked = await requestUsb(filters, label);
+  const picked = await requestUsb(filters, label, cb);
   ({ dev } = await openAuthorized(filters, 3000));
   if (dev) return dev;
   try {
@@ -109,8 +128,8 @@ export async function openBootloaderUsb(filters: USBDeviceFilter[], afterReset: 
     const listed = await authorizedDevices(filters);
     if (listed.some((d) => d !== picked)) {
       throw new NeedsUserGesture(
-        "That was an old entry the browser still lists. Click Flash again; if the list opens, " +
-          `pick the other ${label} with the same name.`,
+        "That was an old entry the browser still lists. Click Continue; if the list opens, " +
+          `pick the other "${label}" with the same name.`,
       );
     }
     throw accessDenied(filters, label, e);

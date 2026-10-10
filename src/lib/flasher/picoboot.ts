@@ -170,7 +170,7 @@ class Picoboot {
 
 export async function flashPicoboot({ device, parts, options, cb }: FlashJob, afterReset: boolean) {
   const sectors = toSectors(parts[0].data, parts[0].name);
-  const dev = await openBootloaderUsb(device.usbFilters!, afterReset, "RP2 Boot device");
+  const dev = await openBootloaderUsb(device.usbFilters!, afterReset, device.bootloaderName ?? "RP2 Boot", cb);
   const pb = await Picoboot.open(dev);
   cb.log(`PICOBOOT device ${dev.productName ?? ""} · ${sectors.length} sector(s) to write`);
 

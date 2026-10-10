@@ -221,8 +221,14 @@ const SETUP_RETRY_MS = 6000;
  * claim or report a not-idle state for a moment, which used to fail the first
  * attempt while "Try again" worked. So setup is retried for a few seconds.
  */
-async function openDfu(filters: USBDeviceFilter[], afterReset: boolean, cb: FlashCallbacks, preferAlt?: RegExp) {
-  let dev = await openBootloaderUsb(filters, afterReset, "DFU device");
+async function openDfu(
+  filters: USBDeviceFilter[],
+  afterReset: boolean,
+  cb: FlashCallbacks,
+  label: string,
+  preferAlt?: RegExp,
+) {
+  let dev = await openBootloaderUsb(filters, afterReset, label, cb);
   const until = performance.now() + SETUP_RETRY_MS;
   for (;;) {
     let dfu: DfuDevice | null = null;
@@ -280,7 +286,7 @@ async function setupDfu(dev: USBDevice, cb: FlashCallbacks, preferAlt?: RegExp) 
 
 export async function flashDfu(job: FlashJob, afterReset: boolean) {
   const { device, parts, cb } = job;
-  const dfu = await openDfu(device.usbFilters!, afterReset, cb);
+  const dfu = await openDfu(device.usbFilters!, afterReset, cb, device.bootloaderName ?? "DFU device");
   try {
     const data = parts[0].data;
     const n = Math.ceil(data.length / dfu.transferSize);
@@ -312,7 +318,7 @@ export async function flashDfu(job: FlashJob, afterReset: boolean) {
 
 export async function flashDfuse(job: FlashJob, afterReset: boolean) {
   const { device, parts, cb } = job;
-  const dfu = await openDfu(device.usbFilters!, afterReset, cb, /flash/i);
+  const dfu = await openDfu(device.usbFilters!, afterReset, cb, device.bootloaderName ?? "DFU device", /flash/i);
   const start = device.dfuseAddress ?? parts[0].address;
   const data = parts[0].data;
 
