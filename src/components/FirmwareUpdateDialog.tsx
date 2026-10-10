@@ -24,6 +24,16 @@ import {
 
 type Status = "idle" | "flashing" | "waiting" | "done" | "error";
 type LogLine = { msg: string; kind: "info" | "ok" | "warn" | "err" };
+/** Firmware download from the release to the browser (not to the board). */
+type Download = { loaded: number; total: number | null; done: boolean; error?: string };
+
+/** Thrown into a running flash when the user cancels it. */
+class FlashCancelled extends Error {
+    constructor() {
+        super("Flashing cancelled");
+        this.name = "FlashCancelled";
+    }
+}
 
 interface FirmwareUpdateDialogProps {
     open: boolean;
@@ -81,20 +91,35 @@ export default function FirmwareUpdateDialog({
     // the prefetch effect) so pressing Flash reaches the device picker without
     // waiting on the network.
     const firmwareFileRef = useRef<{ key: string; file: Promise<File> } | null>(null);
+    const [download, setDownload] = useState<Download | null>(null);
     const getFirmwareFile = useCallback((tag: string, asset: string) => {
         const key = `${tag}/${asset}`;
         if (firmwareFileRef.current?.key !== key) {
-            const file = fetchFirmware(firmwareUrl(asset, tag)).then(
-                (bytes) => new File([bytes as BlobPart], asset)
-            );
+            const isCurrent = () => firmwareFileRef.current?.key === key;
+            setDownload({ loaded: 0, total: null, done: false });
+            const file = fetchFirmware(firmwareUrl(asset, tag), {
+                // A tagged release's files never change, so the browser may
+                // keep them; "latest" must always be fetched again.
+                cache: tag === "latest" ? "no-store" : "default",
+                onProgress: (loaded, total) => {
+                    if (isCurrent()) setDownload({ loaded, total, done: false });
+                },
+            }).then((bytes) => {
+                if (isCurrent()) setDownload({ loaded: bytes.length, total: bytes.length, done: true });
+                return new File([bytes as BlobPart], asset);
+            });
             // Don't keep a failed download: the next attempt retries it.
-            file.catch(() => {
-                if (firmwareFileRef.current?.file === file) firmwareFileRef.current = null;
+            file.catch((e) => {
+                if (firmwareFileRef.current?.file !== file) return;
+                firmwareFileRef.current = null;
+                setDownload({ loaded: 0, total: null, done: false, error: e instanceof Error ? e.message : String(e) });
             });
             firmwareFileRef.current = { key, file };
         }
         return firmwareFileRef.current.file;
     }, []);
+    // The running flash, so Cancel can stop it.
+    const abortRef = useRef<AbortController | null>(null);
 
 
     const log = useCallback(
@@ -134,13 +159,19 @@ export default function FirmwareUpdateDialog({
         getFirmwareFile(latest?.tag ?? "latest", target.asset).catch(() => { });
     }, [open, target, latest, latestError, getFirmwareFile]);
     const busy = status === "flashing";
+    const downloading = !!download && !download.done && !download.error;
     const assetMissing =
         !!target && Array.isArray(latest?.assets) && !latest.assets.some((a) => a.name === target.asset);
 
     const runFlash = async () => {
         if (!target || busy) return;
+        const abort = new AbortController();
+        abortRef.current = abort;
+        const checkCancelled = () => {
+            if (abort.signal.aborted) throw new FlashCancelled();
+        };
         setStatus("flashing");
-        setProgress({ pct: 0, label: "Downloading firmware" });
+        setProgress({ pct: 0, label: "connecting" });
 
         // Pin the download to the version shown in the dialog.
         const tag = latest?.tag ?? "latest";
@@ -157,6 +188,7 @@ export default function FirmwareUpdateDialog({
 
         try {
             const port = await beforeFlash();
+            checkCancelled();
 
             // Serial-based flashing (and the 1200 baud reset) can reuse the port
             // Chords was just using instead of asking the user to pick it again.
@@ -167,6 +199,7 @@ export default function FirmwareUpdateDialog({
             // Usually already downloaded by the prefetch: the browser only opens
             // the USB picker shortly after a click, so this mustn't wait on the network.
             const firmwareFile = await getFirmwareFile(tag, target.asset);
+            checkCancelled();
 
             // STM32: forget every boot device remembered from earlier, so the
             // picker only offers what's plugged in now and no old entry is reused.
@@ -194,11 +227,19 @@ export default function FirmwareUpdateDialog({
                     skipTouch: inBootloader,
                 },
                 {
-                    log: (m) => log(m),
-                    progress: (pct, label) =>
-                        setProgress({ pct: Math.max(0, Math.min(100, pct)), label: label ?? "" }),
+                    // Throwing here stops the flasher at its next step; each
+                    // one closes the port / USB device on the way out.
+                    log: (m) => {
+                        checkCancelled();
+                        log(m);
+                    },
+                    progress: (pct, label) => {
+                        checkCancelled();
+                        setProgress({ pct: Math.max(0, Math.min(100, pct)), label: label ?? "" });
+                    },
                 }
             );
+            checkCancelled();
             setProgress({ pct: 100, label: "Done" });
             // ...and forget this one too once it has left boot mode.
             if (isStm32) await forgetBootDevices(device.usbFilters ?? []);
@@ -211,6 +252,8 @@ export default function FirmwareUpdateDialog({
                 onFlashed();
             }, 800);
         } catch (e) {
+            // Cancel already reset the dialog; ignore whatever the stopped flash threw.
+            if (abort.signal.aborted) return;
             setProgress(null);
             if (e instanceof NeedsUserGesture) {
                 // The board rebooted into its bootloader; the browser needs a
@@ -230,14 +273,54 @@ export default function FirmwareUpdateDialog({
             }
         } finally {
             setPreferredSerialPort(null);
+            if (abortRef.current === abort) abortRef.current = null;
         }
     };
 
+    // Stop a running flash. The board may be left in its bootloader, which
+    // every supported board recovers from by flashing again.
+    const cancelFlash = () => {
+        const abort = abortRef.current;
+        if (!abort) return;
+        abort.abort();
+        abortRef.current = null;
+        // A step waiting on the device (no answer, or mid-transfer) only ends
+        // when the device is closed.
+        if (target?.device.usbFilters && "usb" in navigator) {
+            const filters = target.device.usbFilters;
+            navigator.usb.getDevices().then((devs) =>
+                devs
+                    .filter((d) => d.opened && filters.some((f) => f.vendorId === d.vendorId && (f.productId === undefined || f.productId === d.productId)))
+                    .forEach((d) => d.close().catch(() => { }))
+            );
+        }
+        setPreferredSerialPort(null);
+        setProgress(null);
+        setStatus("idle");
+        log("Cancelled. If the board stays in bootloader mode, press Flash again or replug it.", "warn");
+    };
+
     const flashLabel =
-        status === "flashing" ? "Flashing…" : status === "waiting" ? "Continue" : status === "error" ? "Try again" : "Flash firmware";
+        status === "flashing"
+            ? "Flashing…"
+            : downloading
+                ? "Downloading firmware…"
+                : status === "waiting"
+                    ? "Continue"
+                    : status === "error"
+                        ? "Try again"
+                        : "Flash firmware";
+    const kb = (n: number) => `${(n / 1024).toFixed(1)} KB`;
 
     return (
-        <Dialog open={open} onOpenChange={(o) => !busy && onOpenChange(o)}>
+        <Dialog
+            open={open}
+            onOpenChange={(o) => {
+                if (!o && busy) cancelFlash();
+                onOpenChange(o);
+            }}
+        >
+            {/* A stray click outside mustn't stop a flash; Cancel, Esc and × still do. */}
             <DialogContent className="max-w-lg" onInteractOutside={(e) => busy && e.preventDefault()}>
                 <DialogHeader>
                     <DialogTitle>Your firmware is not updated</DialogTitle>
@@ -317,10 +400,40 @@ export default function FirmwareUpdateDialog({
                             </p>
                         )}
 
+                        {download && (
+                            <div className="flex flex-col gap-1">
+                                <div className="flex justify-between text-xs text-muted-foreground">
+                                    <span>
+                                        {download.error
+                                            ? "Firmware download failed"
+                                            : download.done
+                                                ? `Firmware downloaded (${kb(download.loaded)})`
+                                                : `Downloading firmware${latest ? ` ${latest.tag}` : ""} to this browser`}
+                                    </span>
+                                    <span>
+                                        {download.done || download.error
+                                            ? ""
+                                            : download.total
+                                                ? `${Math.round((download.loaded / download.total) * 100)}%`
+                                                : kb(download.loaded)}
+                                    </span>
+                                </div>
+                                {!download.done && !download.error && (
+                                    <div className="h-1.5 overflow-hidden rounded-full bg-muted">
+                                        <div
+                                            className="h-full bg-primary transition-all"
+                                            style={{ width: `${download.total ? (download.loaded / download.total) * 100 : 0}%` }}
+                                        />
+                                    </div>
+                                )}
+                                {download.error && <p className="text-xs text-destructive">{download.error}</p>}
+                            </div>
+                        )}
+
                         {progress && (
                             <div className="flex flex-col gap-1">
                                 <div className="flex justify-between text-xs text-muted-foreground">
-                                    <span>{progress.label}</span>
+                                    <span>Flashing to the board: {progress.label}</span>
                                     <span>{Math.round(progress.pct)}%</span>
                                 </div>
                                 <div className="h-2 overflow-hidden rounded-full bg-muted">
@@ -382,11 +495,13 @@ export default function FirmwareUpdateDialog({
                 <DialogFooter className="gap-2">
                     {status === "done" ? null : (
                         <>
-                            <Button variant="outline" disabled={busy} onClick={() => onOpenChange(false)}>
-                                Cancel
+                            <Button variant="outline" onClick={() => (busy ? cancelFlash() : onOpenChange(false))}>
+                                {busy ? "Stop" : "Cancel"}
                             </Button>
                             {target && (
-                                <Button disabled={busy || assetMissing} onClick={runFlash}>
+                                // The browser only opens the device picker shortly
+                                // after a click, so Flash waits for the download.
+                                <Button disabled={busy || downloading || (!latest && !latestError) || assetMissing} onClick={runFlash}>
                                     {flashLabel}
                                 </Button>
                             )}

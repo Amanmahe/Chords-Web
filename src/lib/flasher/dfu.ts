@@ -1,7 +1,8 @@
 import type { FlashCallbacks, FlashJob } from "./types";
 import { hex } from "./firmware";
 import { sleep } from "./serial";
-import { openBootloaderUsb, restartIfStillThere } from "./usb";
+import { NeedsUserGesture } from "./types";
+import { findBootloaderUsb, openBootloaderUsb, restartIfStillThere } from "./usb";
 
 /* -------------------------------------------------------------------------- */
 /* USB DFU 1.1 + ST DfuSe over WebUSB                                          */
@@ -21,6 +22,18 @@ const STATE = {
   dfuUPLOAD_IDLE: 9,
   dfuERROR: 10,
 } as const;
+
+// A DFU request that gets no answer (e.g. the device is mid-reset) would
+// otherwise wait forever. Generous: some ROMs hold GETSTATUS during an erase.
+const TRANSFER_TIMEOUT_MS = 10000;
+
+function withTimeout<T>(p: Promise<T>, what: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout>;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`The board stopped answering (${what})`)), TRANSFER_TIMEOUT_MS);
+  });
+  return Promise.race([p, timeout]).finally(() => clearTimeout(timer));
+}
 
 interface Segment {
   start: number;
@@ -67,16 +80,16 @@ class DfuDevice {
   ) {}
 
   private out(request: number, value: number, data?: BufferSource) {
-    return this.dev.controlTransferOut(
-      { requestType: "class", recipient: "interface", request, value, index: this.intf },
-      data,
+    return withTimeout(
+      this.dev.controlTransferOut({ requestType: "class", recipient: "interface", request, value, index: this.intf }, data),
+      "DFU request",
     );
   }
 
   private async in(request: number, value: number, length: number) {
-    const r = await this.dev.controlTransferIn(
-      { requestType: "class", recipient: "interface", request, value, index: this.intf },
-      length,
+    const r = await withTimeout(
+      this.dev.controlTransferIn({ requestType: "class", recipient: "interface", request, value, index: this.intf }, length),
+      "DFU request",
     );
     if (r.status !== "ok" || !r.data) throw new Error(`DFU control IN failed (${r.status})`);
     return r.data;
@@ -199,11 +212,41 @@ function parseConfig(d: DataView): DescInfo {
   return info;
 }
 
+// How long a bootloader that has just appeared gets to become usable.
+const SETUP_RETRY_MS = 6000;
+
+/**
+ * Open the bootloader and bring it to dfuIDLE. Right after it appears (reset,
+ * or the user just put it in DFU mode) a bootloader can refuse the interface
+ * claim or report a not-idle state for a moment, which used to fail the first
+ * attempt while "Try again" worked. So setup is retried for a few seconds.
+ */
 async function openDfu(filters: USBDeviceFilter[], afterReset: boolean, cb: FlashCallbacks, preferAlt?: RegExp) {
-  const dev = await openBootloaderUsb(filters, afterReset, "DFU device");
+  let dev = await openBootloaderUsb(filters, afterReset, "DFU device");
+  const until = performance.now() + SETUP_RETRY_MS;
+  for (;;) {
+    let dfu: DfuDevice | null = null;
+    try {
+      if (!dev.opened) await dev.open();
+      dfu = await setupDfu(dev, cb, preferAlt);
+      await dfu.ensureIdle();
+      return dfu;
+    } catch (e) {
+      if (dfu) await dfu.close();
+      else await dev.close().catch(() => {});
+      if (e instanceof NeedsUserGesture || performance.now() >= until) throw e;
+      cb.log(`The bootloader isn't ready yet (${e instanceof Error ? e.message : String(e)}); retrying…`);
+      await sleep(500);
+      // It may have re-enumerated: prefer the entry that is there now.
+      dev = (await findBootloaderUsb(filters)) ?? dev;
+    }
+  }
+}
+
+async function setupDfu(dev: USBDevice, cb: FlashCallbacks, preferAlt?: RegExp) {
   if (!dev.configuration) await dev.selectConfiguration(1);
 
-  const desc = parseConfig(await readConfigDescriptor(dev));
+  const desc = parseConfig(await withTimeout(readConfigDescriptor(dev), "USB descriptors"));
 
   // Collect DFU-mode alternates
   const alts: { intf: number; alt: number; name: string }[] = [];
@@ -239,7 +282,6 @@ export async function flashDfu(job: FlashJob, afterReset: boolean) {
   const { device, parts, cb } = job;
   const dfu = await openDfu(device.usbFilters!, afterReset, cb);
   try {
-    await dfu.ensureIdle();
     const data = parts[0].data;
     const n = Math.ceil(data.length / dfu.transferSize);
     for (let b = 0; b < n; b++) {
@@ -284,7 +326,6 @@ export async function flashDfuse(job: FlashJob, afterReset: boolean) {
   };
 
   try {
-    await dfu.ensureIdle();
     const mem = parseDfuseMemory(dfu.altName);
     if (!mem.segments.length) throw new Error(`Can't read memory layout from "${dfu.altName}"`);
 

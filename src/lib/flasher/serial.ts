@@ -20,7 +20,7 @@ export class SerialIO {
   constructor(public readonly port: SerialPort) {}
 
   async open(baudRate: number) {
-    await this.port.open({ baudRate, bufferSize: 16384 });
+    await openPort(this.port, { baudRate, bufferSize: 16384 });
     this.buf = [];
     this.loop = this.readLoop();
   }
@@ -161,21 +161,28 @@ export async function findOrPickSerialPort(filters?: SerialPortFilter[]) {
 }
 
 /**
- * Arduino "1200 bps touch": opening the sketch's CDC port at 1200 baud and
- * closing it makes the board jump into its bootloader.
+ * Open a serial port. Windows keeps a COM port busy for a moment after it was
+ * closed (e.g. by Chords just before flashing, or between two baud rates), so
+ * the first open can fail: retry briefly.
  */
-export async function touch1200(port: SerialPort) {
-  // Windows keeps a COM port busy for a moment after it was closed (e.g. by
-  // Chords just before flashing), so the first open can fail: retry briefly.
+async function openPort(port: SerialPort, options: SerialOptions) {
   for (let attempt = 0; ; attempt++) {
     try {
-      await port.open({ baudRate: 1200 });
-      break;
+      await port.open(options);
+      return;
     } catch (e) {
       if (attempt >= 10 || !(e instanceof DOMException && e.name === "NetworkError")) throw e;
       await sleep(300);
     }
   }
+}
+
+/**
+ * Arduino "1200 bps touch": opening the sketch's CDC port at 1200 baud and
+ * closing it makes the board jump into its bootloader.
+ */
+export async function touch1200(port: SerialPort) {
+  await openPort(port, { baudRate: 1200 });
   try {
     await port.setSignals({ dataTerminalReady: false });
   } catch {}

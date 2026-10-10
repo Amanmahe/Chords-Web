@@ -53,10 +53,36 @@ export function toBinary(bytes: Uint8Array, name: string): { data: Uint8Array; s
   return { data: bytes, start: null };
 }
 
-export async function fetchFirmware(url: string): Promise<Uint8Array> {
-  const res = await fetch(url, { cache: "no-store" });
+export interface FetchFirmwareOptions {
+  /** Defaults to "no-store" so bundled files in /public are never stale. */
+  cache?: RequestCache;
+  /** Bytes received so far, and the total when the server sends it. */
+  onProgress?: (loaded: number, total: number | null) => void;
+}
+
+export async function fetchFirmware(url: string, opts: FetchFirmwareOptions = {}): Promise<Uint8Array> {
+  const res = await fetch(url, { cache: opts.cache ?? "no-store" });
   if (!res.ok) throw new Error(`Couldn't load ${url} (HTTP ${res.status}). Upload a file instead.`);
-  return new Uint8Array(await res.arrayBuffer());
+  if (!opts.onProgress || !res.body) return new Uint8Array(await res.arrayBuffer());
+
+  const total = Number(res.headers.get("Content-Length")) || null;
+  const chunks: Uint8Array[] = [];
+  let loaded = 0;
+  const reader = res.body.getReader();
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+    loaded += value.length;
+    opts.onProgress(loaded, total);
+  }
+  const out = new Uint8Array(loaded);
+  let at = 0;
+  for (const c of chunks) {
+    out.set(c, at);
+    at += c.length;
+  }
+  return out;
 }
 
 export function padTo(data: Uint8Array, multiple: number, fill = 0xff) {

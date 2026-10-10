@@ -115,12 +115,12 @@ export const DEVICES: DeviceDef[] = [
     protocol: "dfuse",
     firmware: [{ url: "/firmware/giga-r1/firmware.bin", address: 0x08040000 }],
     accept: ".bin",
-    usbFilters: [
-      { vendorId: ARDUINO_VID, productId: 0x0366 },
-      { vendorId: ARDUINO_VID, productId: 0x0266 },
-    ],
+    // Bootloader only: 0x0266 is the running sketch, which must not be taken
+    // for the bootloader (the reset would be skipped).
+    usbFilters: [{ vendorId: ARDUINO_VID, productId: 0x0366 }],
     dfuseAddress: 0x08040000,
     touch1200: true,
+    serialFilters: [{ usbVendorId: ARDUINO_VID, usbProductId: 0x0266 }],
     instructions: [
       "Connect the GIGA R1 over USB.",
       "Flash will reset it into the bootloader (or double-tap RESET: the green LED fades in and out).",
